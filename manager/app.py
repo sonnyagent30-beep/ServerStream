@@ -216,9 +216,10 @@ class Supervisor:
         self._lock = threading.Lock()
         self._procs: dict[tuple[int, str], Restreamer] = {}
         self._retry_after: dict[tuple[int, str], float] = {}
+        self._failures: dict[tuple[int, str], int] = {}
         self.srs_online = False
         self.last_poll: Optional[float] = None
-        self._stop = threading.Event()
+        self._shutdown = threading.Event()
 
     # ---- SRS ----
     def active_streams(self) -> list[str]:
@@ -276,48 +277,52 @@ class Supervisor:
         with self._lock:
             existing = dict(self._procs)
 
-        # tear down: stream ended, platform disabled/deleted, or process died
+        now = time.time()
+
+        # ---- tear down: stream ended, platform disabled/deleted, or ffmpeg died
         for key, r in existing.items():
             if key not in wanted:
                 self._stop(key, "stream ended or platform disabled")
-            elif not r.alive:
+                self._failures.pop(key, None)
+                self._retry_after.pop(key, None)
+                continue
+            if not r.alive:
                 rc = r.proc.poll()
-                if time.time() - r.started_at > 20:
-                    self._stop(key, f"ffmpeg exited rc={rc}")
+                # a long healthy run resets the failure counter
+                if r.uptime > 60:
+                    self._failures[key] = 0
+                fails = self._failures.get(key, 0) + 1
+                self._failures[key] = fails
+                backoff = min(60, 2 ** min(fails, 6))
+                self._retry_after[key] = now + backoff
+                self._stop(key, f"ffmpeg exited rc={rc} (retry in {backoff}s)")
 
-        # bring up
+        # ---- bring up anything that should be running
         for p in platforms:
             for s in streams:
                 key = (int(p["id"]), s)
                 with self._lock:
-                    cur = self._procs.get(key)
-                if cur is not None and cur.alive:
-                    continue
-                if cur is not None and not cur.alive:
-                    # died quickly -> backoff, then allow one retry cycle
-                    wait = self._retry_after.get(key, 0)
-                    if time.time() < wait:
+                    if self._procs.get(key) is not None:
                         continue
-                    self._stop(key, "retrying")
-                    self._retry_after[key] = time.time() + 15
+                if now < self._retry_after.get(key, 0):
                     continue
                 self._start(p, s)
 
     def run(self) -> None:
         log.info("supervisor started (poll=%ss)", POLL_INTERVAL)
-        while not self._stop.is_set():
+        while not self._shutdown.is_set():
             try:
                 self.poll_once()
             except Exception:
                 log.exception("supervisor poll error")
-            self._stop.wait(POLL_INTERVAL)
+            self._shutdown.wait(POLL_INTERVAL)
 
     def snapshot(self) -> list[dict[str, Any]]:
         with self._lock:
             return [r.snapshot() for r in self._procs.values()]
 
     def stop_all(self) -> None:
-        self._stop.set()
+        self._shutdown.set()
         with self._lock:
             procs = list(self._procs.values())
             self._procs.clear()
