@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ServerStream</title>
+<style>
+  :root{
+    --bg:#0b0f14; --card:#131a22; --card2:#0f151c; --border:#243040;
+    --text:#dbe4ee; --muted:#7d8fa3; --accent:#4dabf7; --green:#3fb950;
+    --red:#f85149; --yellow:#d29922; --radius:10px;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+       background:var(--bg);color:var(--text);line-height:1.55;padding:24px 20px 60px}
+  .wrap{max-width:1080px;margin:0 auto}
+  header{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:4px}
+  h1{font-size:1.65rem;letter-spacing:-.02em}
+  h1 span{color:var(--accent)}
+  .tag{font-size:.72rem;color:var(--muted);border:1px solid var(--border);
+       border-radius:999px;padding:2px 9px}
+  .sub{color:var(--muted);font-size:.88rem;margin-bottom:22px}
+  .grid{display:grid;gap:16px}
+  .g3{grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);
+        padding:18px}
+  .card h2{font-size:.8rem;text-transform:uppercase;letter-spacing:.09em;color:var(--muted);
+           margin-bottom:14px;font-weight:600}
+  .stat{background:var(--card2);border:1px solid var(--border);border-radius:8px;
+        padding:13px 14px}
+  .stat .k{font-size:.75rem;color:var(--muted);margin-bottom:5px}
+  .stat .v{font-size:1.35rem;font-weight:600;font-variant-numeric:tabular-nums}
+  .v.ok{color:var(--green)} .v.bad{color:var(--red)} .v.warn{color:var(--yellow)}
+  .row{display:flex;justify-content:space-between;align-items:center;gap:12px;
+       padding:9px 0;border-bottom:1px solid var(--border);font-size:.88rem}
+  .row:last-child{border-bottom:none}
+  .row .k{color:var(--muted);flex:0 0 auto}
+  .row .v{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+          font-size:.82rem;text-align:right;word-break:break-all}
+  .copy{background:transparent;border:1px solid var(--border);color:var(--accent);
+        border-radius:6px;padding:2px 8px;font-size:.72rem;cursor:pointer;margin-left:8px}
+  .copy:hover{background:var(--accent);color:#06121f;border-color:var(--accent)}
+  table{width:100%;border-collapse:collapse;font-size:.87rem}
+  th{text-align:left;font-size:.72rem;text-transform:uppercase;letter-spacing:.07em;
+     color:var(--muted);font-weight:600;padding:0 10px 9px 0;border-bottom:1px solid var(--border)}
+  td{padding:11px 10px 11px 0;border-bottom:1px solid var(--border);vertical-align:top}
+  .pill{display:inline-flex;align-items:center;gap:6px;font-size:.73rem;
+        border-radius:999px;padding:3px 10px;border:1px solid var(--border);white-space:nowrap}
+  .pill .d{width:7px;height:7px;border-radius:50%;background:var(--muted)}
+  .pill.on{color:var(--green);border-color:#1c4429}.pill.on .d{background:var(--green)}
+  .pill.off{color:var(--muted)}
+  .pill.err{color:var(--red);border-color:#4d1f1c}.pill.err .d{background:var(--red)}
+  .pill.live{color:var(--yellow);border-color:#4a3a10}.pill.live .d{background:var(--yellow)}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.79rem}
+  .muted{color:var(--muted)}
+  input,select{width:100%;background:var(--card2);border:1px solid var(--border);
+      color:var(--text);border-radius:7px;padding:9px 11px;font-size:.86rem;
+      font-family:inherit}
+  input:focus,select:focus{outline:none;border-color:var(--accent)}
+  label{display:block;font-size:.76rem;color:var(--muted);margin:0 0 5px}
+  .fgrid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(200px,1fr))}
+  .btn{background:var(--accent);color:#06121f;border:none;border-radius:7px;
+       padding:10px 17px;font-size:.85rem;font-weight:600;cursor:pointer;font-family:inherit}
+  .btn:hover{filter:brightness(1.1)}
+  .btn.ghost{background:transparent;border:1px solid var(--border);color:var(--text);font-weight:500}
+  .btn.ghost:hover{border-color:var(--accent);color:var(--accent)}
+  .btn.sm{padding:5px 11px;font-size:.76rem}
+  .btn.danger{background:transparent;border:1px solid #4d1f1c;color:var(--red)}
+  .btn.danger:hover{background:var(--red);color:#fff}
+  .actions{display:flex;gap:7px;flex-wrap:wrap}
+  pre{background:#070b0f;border:1px solid var(--border);border-radius:7px;padding:11px;
+      font-size:.74rem;overflow-x:auto;color:#9fb0c2;max-height:190px;
+      font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  details summary{cursor:pointer;color:var(--accent);font-size:.78rem;list-style:none}
+  details summary::-webkit-details-marker{display:none}
+  details summary:before{content:"▸ ";color:var(--muted)}
+  details[open] summary:before{content:"▾ "}
+  .hint{font-size:.78rem;color:var(--muted);margin-top:9px}
+  .empty{color:var(--muted);font-size:.86rem;padding:16px 0;text-align:center}
+  .banner{border-radius:8px;padding:11px 14px;font-size:.84rem;margin-bottom:16px;
+          border:1px solid #4a3a10;background:#1c1607;color:#e3c56b}
+  code{background:var(--card2);padding:2px 6px;border-radius:5px;font-size:.83em;
+       font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  a{color:var(--accent)}
+  .sep{height:16px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Server<span>Stream</span></h1>
+    <span class="tag" id="srsTag">checking…</span>
+  </header>
+  <p class="sub">Stream once from OBS &rarr; restream to every platform simultaneously.</p>
+
+  <div id="banner"></div>
+
+  <div class="card" style="margin-bottom:16px">
+    <h2>Ingest &mdash; point OBS here</h2>
+    <div id="ingestRows"></div>
+    <p class="hint">OBS &rarr; Settings &rarr; Stream &rarr; Service <code>Custom</code>.
+       Use <strong>RTMPS</strong> for an encrypted feed (recommended), RTMP otherwise.
+       Add the stream key after the app name, exactly as shown.</p>
+  </div>
+
+  <div class="grid g3" style="margin-bottom:16px">
+    <div class="stat"><div class="k">SRS server</div><div class="v" id="sSrs">–</div></div>
+    <div class="stat"><div class="k">Live streams</div><div class="v" id="sStreams">–</div></div>
+    <div class="stat"><div class="k">Active restreams</div><div class="v" id="sOut">–</div></div>
+    <div class="stat"><div class="k">Viewers (players)</div><div class="v" id="sViewers">–</div></div>
+  </div>
+
+  <div class="card" style="margin-bottom:16px">
+    <h2>Restream targets</h2>
+    <div id="platWrap"></div>
+  </div>
+
+  <div class="card">
+    <h2>Add a platform</h2>
+    <form id="addForm">
+      <div class="fgrid">
+        <div>
+          <label>Name</label>
+          <input name="name" placeholder="YouTube" required>
+        </div>
+        <div>
+          <label>Preset</label>
+          <select id="preset">
+            <option value="">— choose to autofill —</option>
+            <option value="rtmp://a.rtmp.youtube.com/live2">YouTube Live (RTMP)</option>
+            <option value="rtmps://live-api-s.facebook.com:443/rtmp">Facebook Live (RTMPS)</option>
+            <option value="rtmp://live.twitch.tv/app">Twitch (RTMP)</option>
+            <option value="rtmp://push.tiktoklive.com/live">TikTok (RTMP)</option>
+            <option value="rtmp://ingest.global-contribute.live-video.net/app">AWS IVS (RTMP)</option>
+            <option value="rtmps://ingest.global-contribute.live-video.net:443/app">AWS IVS (RTMPS)</option>
+            <option value="rtmp://live.restream.io/live">Restream.io (RTMP)</option>
+          </select>
+        </div>
+        <div>
+          <label>Server URL</label>
+          <input name="server_url" id="serverUrl" placeholder="rtmp://a.rtmp.youtube.com/live2">
+        </div>
+        <div>
+          <label>Stream key</label>
+          <input name="stream_key" id="streamKey" placeholder="xxxx-xxxx-xxxx-xxxx">
+        </div>
+      </div>
+      <div class="sep"></div>
+      <div class="actions">
+        <button class="btn" type="submit">Add platform</button>
+        <button class="btn ghost" type="button" id="toggleAdv">Advanced: full push URL</button>
+      </div>
+      <div id="advBox" style="display:none;margin-top:12px">
+        <label>Full push URL (overrides server + key; use for custom query params)</label>
+        <input name="full_url" placeholder="rtmp://host/app/key?token=...">
+      </div>
+    </form>
+    <p class="hint">Get the server URL and stream key from each platform's live dashboard.
+       YouTube/Twitch keys are permanent; Facebook gives a fresh key per broadcast
+       (or a persistent key if you enable one).</p>
+  </div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
+  ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+function fmtUptime(s){
+  if(s==null) return "–";
+  const h=Math.floor(s/3600), m=Math.floor(s%3600/60), x=s%60;
+  return h? `${h}h ${m}m` : m? `${m}m ${x}s` : `${x}s`;
+}
+
+async function api(path, opts){
+  const r = await fetch(path, Object.assign({headers:{"Content-Type":"application/json"}}, opts));
+  if(!r.ok) throw new Error((await r.text()) || r.statusText);
+  return r.status===204 ? null : r.json();
+}
+
+function copyRow(k, v, id){
+  return `<div class="row">
+    <span class="k">${esc(k)}</span>
+    <span class="v" id="${id}">${esc(v)}
+      <button class="copy" data-copy="${esc(v)}">copy</button></span>
+  </div>`;
+}
+
+let STATE = null;
+
+function render(){
+  const s = STATE; if(!s) return;
+
+  // header / stats
+  $("#srsTag").textContent = s.srs.online ? "SRS online" : "SRS offline";
+  $("#srsTag").style.color = s.srs.online ? "var(--green)" : "var(--red)";
+  $("#sSrs").textContent = s.srs.online ? "Online" : "Offline";
+  $("#sSrs").className = "v " + (s.srs.online ? "ok" : "bad");
+  $("#sStreams").textContent = s.srs.streams.length;
+  $("#sStreams").className = "v " + (s.srs.streams.length ? "ok" : "");
+  const out = s.restreams.filter(r=>r.state==="running");
+  $("#sOut").textContent = out.length;
+  $("#sOut").className = "v " + (out.length ? "ok" : "");
+  $("#sViewers").textContent = s.srs.clients.players ?? 0;
+
+  // ingest rows
+  $("#ingestRows").innerHTML =
+      copyRow("RTMPS server (recommended)", s.ingest.rtmps, "i1")
+    + copyRow("RTMP server", s.ingest.rtmp, "i2")
+    + copyRow("Stream key", s.ingest.key, "i3")
+    + copyRow("Playback (HLS)", s.ingest.hls.replace("__STREAM__", s.ingest.key), "i4");
+
+  // banner
+  const b = $("#banner");
+  if(!s.srs.online){
+    b.innerHTML = `<div class="banner">SRS is not responding. Check the container:
+      <code>docker compose ps</code> and <code>docker logs serversstream-srs</code>.</div>`;
+  } else if(s.platforms.length && !s.platforms.some(p=>p.configured)){
+    b.innerHTML = `<div class="banner">No platform has a push URL yet &mdash; add one below
+      or your stream will only be available for local playback.</div>`;
+  } else b.innerHTML = "";
+
+  // platform table
+  const w = $("#platWrap");
+  if(!s.platforms.length){
+    w.innerHTML = `<div class="empty">No platforms yet. Add one below.</div>`;
+    return;
+  }
+  let rows = "";
+  for(const p of s.platforms){
+    let st = `<span class="pill off"><span class="d"></span>disabled</span>`;
+    if(p.enabled && p.active) st = `<span class="pill on"><span class="d"></span>restreaming</span>`;
+    else if(p.enabled && !p.configured) st = `<span class="pill live"><span class="d"></span>no URL</span>`;
+    else if(p.enabled) st = `<span class="pill off"><span class="d"></span>idle</span>`;
+
+    let logs = "";
+    for(const r of p.restreams){
+      logs += `<div class="mono" style="margin-bottom:7px">
+        <span class="${r.state==="running"?"":"muted"}">${esc(r.stream)}</span>
+        &middot; ${esc(r.state)} &middot; up ${fmtUptime(r.uptime)}
+        &middot; host ${esc(r.target_host)}
+        ${r.exit_code!==null && r.exit_code!==undefined ? `&middot; rc ${r.exit_code}` : ""}
+        ${r.log && r.log.length ? `<pre>${esc(r.log.join("\n"))}</pre>` : ""}
+      </div>`;
+    }
+    rows += `<tr>
+      <td><strong>${esc(p.name)}</strong>
+          <div class="mono muted" style="margin-top:3px">${esc(p.target_display || "—")}</div>
+          ${logs ? `<details style="margin-top:7px"><summary>logs</summary>${logs}</details>` : ""}
+      </td>
+      <td>${st}</td>
+      <td><div class="actions">
+        <button class="btn ghost sm" data-act="toggle" data-id="${p.id}">
+          ${p.enabled ? "Disable" : "Enable"}</button>
+        <button class="btn ghost sm" data-act="edit" data-id="${p.id}">Edit</button>
+        <button class="btn danger sm" data-act="del" data-id="${p.id}">Delete</button>
+      </div></td>
+    </tr>`;
+  }
+  w.innerHTML = `<table><thead><tr>
+      <th>Platform</th><th>Status</th><th>Actions</th>
+    </tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+async function refresh(){
+  try{
+    STATE = await api("/api/state");
+    render();
+  }catch(e){
+    $("#srsTag").textContent = "manager unreachable";
+    $("#srsTag").style.color = "var(--red)";
+  }
+}
+
+// --- interactions -------------------------------------------------------
+document.addEventListener("click", async e => {
+  const c = e.target.closest("[data-copy]");
+  if(c){
+    try{ await navigator.clipboard.writeText(c.dataset.copy);
+         c.textContent="copied"; setTimeout(()=>c.textContent="copy",1200);}catch(_){}
+    return;
+  }
+  const b = e.target.closest("[data-act]");
+  if(!b) return;
+  const id = b.dataset.id, act = b.dataset.act;
+  const p = STATE.platforms.find(x => String(x.id) === String(id));
+  try{
+    if(act === "toggle"){
+      await api(`/api/platforms/${id}`, {method:"PATCH",
+        body: JSON.stringify({enabled: !p.enabled})});
+    } else if(act === "del"){
+      if(!confirm(`Delete "${p.name}"?`)) return;
+      await api(`/api/platforms/${id}`, {method:"DELETE"});
+    } else if(act === "edit"){
+      const name = prompt("Name:", p.name); if(name===null) return;
+      const server_url = prompt("Server URL:", p.server_url); if(server_url===null) return;
+      const stream_key = prompt("Stream key:", p.stream_key); if(stream_key===null) return;
+      await api(`/api/platforms/${id}`, {method:"PATCH",
+        body: JSON.stringify({name, server_url, stream_key})});
+    }
+    await refresh();
+  }catch(err){ alert("Failed: " + err.message); }
+});
+
+$("#preset").addEventListener("change", e => {
+  if(!e.target.value) return;
+  $("#serverUrl").value = e.target.value;
+  const opt = e.target.selectedOptions[0].textContent;
+  const nm = document.querySelector('input[name="name"]');
+  if(!nm.value) nm.value = opt.replace(/\s*\(.*\)$/, "");
+});
+
+$("#toggleAdv").addEventListener("click", () => {
+  const box = $("#advBox");
+  box.style.display = box.style.display === "none" ? "block" : "none";
+});
+
+$("#addForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const f = new FormData(e.target);
+  const payload = {
+    name: (f.get("name")||"").trim(),
+    server_url: (f.get("server_url")||"").trim(),
+    stream_key: (f.get("stream_key")||"").trim(),
+    full_url: (f.get("full_url")||"").trim(),
+    enabled: true,
+  };
+  if(!payload.full_url && !(payload.server_url && payload.stream_key)){
+    alert("Fill in the server URL and stream key (or use the advanced full URL).");
+    return;
+  }
+  try{
+    await api("/api/platforms", {method:"POST", body: JSON.stringify(payload)});
+    e.target.reset();
+    $("#advBox").style.display = "none";
+    await refresh();
+  }catch(err){ alert("Failed: " + err.message); }
+});
+
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>

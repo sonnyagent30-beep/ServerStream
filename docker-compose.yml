@@ -1,34 +1,53 @@
-version: "3.8"
-
 services:
   srs:
     image: ossrs/srs:5
     container_name: serversstream-srs
     restart: unless-stopped
-    ports:
-      - "1935:1935"
-      - "1985:1985"
-      - "8080:8080"
-      - "1986:1986"
+    environment:
+      SRS_VHOST_HLS_HLS_FRAGMENT: "3"
+      SRS_VHOST_HLS_HLS_WINDOW: "10"
     volumes:
       - ./srs.conf:/usr/local/srs/conf/srs.conf:ro
-      - ./hooks:/usr/local/srs/hooks:ro
-      - srs-logs:/usr/local/srs/objs/logs
-    environment:
-      - CANDIDATE=${CANDIDATE:-}
-    command: >
-      ./objs/srs -c conf/srs.conf
+      - ./logs/srs:/usr/local/srs/objs/logs
+    command: ["./objs/srs", "-c", "conf/srs.conf"]
+    networks: [ss]
 
-  web:
-    image: nginx:alpine
-    container_name: serversstream-web
+  manager:
+    build: ./manager
+    container_name: serversstream-manager
     restart: unless-stopped
-    ports:
-      - "8081:80"
+    depends_on: [srs]
+    environment:
+      SRS_API: http://srs:1985
+      SRS_RTMP: rtmp://srs:1935
+      INGEST_APP: live
+      INGEST_KEY: ${STREAM_KEY:-livestream}
+      PUBLIC_HOST: ${PUBLIC_HOST:-localhost}
+      PUBLIC_RTMP_PORT: "1935"
+      PUBLIC_RTMPS_PORT: "1936"
+      DB_PATH: /data/serversstream.db
+      LOG_DIR: /data/logs
+      POLL_INTERVAL: "5"
     volumes:
-      - ./web:/usr/share/nginx/html:ro
-    depends_on:
-      - srs
+      - manager-data:/data
+    networks: [ss]
+
+  edge:
+    image: nginx:alpine
+    container_name: serversstream-edge
+    restart: unless-stopped
+    depends_on: [srs, manager]
+    ports:
+      - "1935:1935"
+      - "1936:1936"
+    volumes:
+      - ./edge/nginx.conf:/etc/nginx/nginx.conf:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+    networks: [ss]
 
 volumes:
-  srs-logs:
+  manager-data:
+
+networks:
+  ss:
+    name: serversstream

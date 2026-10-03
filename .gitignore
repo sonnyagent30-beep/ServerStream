@@ -1,9 +1,17 @@
+# secrets
 .env
-*.log
+
+# runtime
 logs/
+*.log
+
+# python
+__pycache__/
+*.pyc
+.venv/
+
+# os / editor
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
-srs-logs/
-node_modules/
