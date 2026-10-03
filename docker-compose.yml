@@ -10,6 +10,8 @@ services:
       - ./srs.conf:/usr/local/srs/conf/srs.conf:ro
       - ./logs/srs:/usr/local/srs/objs/logs
     command: ["./objs/srs", "-c", "conf/srs.conf"]
+    ports:
+      - "127.0.0.1:8080:8080"   # HLS/FLV playback, proxied by host nginx
     networks: [ss]
 
   manager:
@@ -30,6 +32,8 @@ services:
       POLL_INTERVAL: "5"
     volumes:
       - manager-data:/data
+    ports:
+      - "127.0.0.1:8081:8081"   # host nginx proxies the dashboard from here
     networks: [ss]
 
   edge:
