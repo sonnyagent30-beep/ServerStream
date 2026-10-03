@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ServerStream — Dashboard</title>
+    <style>
+        :root {
+            --bg: #0d1117;
+            --card: #161b22;
+            --border: #30363d;
+            --text: #c9d1d9;
+            --accent: #58a6ff;
+            --green: #3fb950;
+            --red: #f85149;
+            --yellow: #d29922;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+            padding: 2rem;
+        }
+        .container { max-width: 900px; margin: 0 auto; }
+        h1 { color: var(--accent); margin-bottom: 0.5rem; font-size: 2rem; }
+        .subtitle { color: #8b949e; margin-bottom: 2rem; }
+        .card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+        .card h2 { color: var(--accent); margin-bottom: 1rem; font-size: 1.2rem; }
+        .status-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+        }
+        .status-item {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 1rem;
+            text-align: center;
+        }
+        .status-item .label { font-size: 0.85rem; color: #8b949e; margin-bottom: 0.5rem; }
+        .status-item .value { font-size: 1.5rem; font-weight: bold; }
+        .status-item .value.online { color: var(--green); }
+        .status-item .value.offline { color: var(--red); }
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 0.5rem 0;
+            border-bottom: 1px solid var(--border);
+        }
+        .info-row:last-child { border-bottom: none; }
+        .info-row .key { color: #8b949e; }
+        .info-row .val { color: var(--text); font-family: monospace; }
+        .copy-btn {
+            background: var(--accent);
+            color: #0d1117;
+            border: none;
+            border-radius: 4px;
+            padding: 0.25rem 0.75rem;
+            cursor: pointer;
+            font-size: 0.8rem;
+            margin-left: 0.5rem;
+        }
+        .copy-btn:hover { opacity: 0.8; }
+        .platform-list { list-style: none; }
+        .platform-list li {
+            padding: 0.5rem 0;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .platform-list li:last-child { border-bottom: none; }
+        .dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+        .dot.active { background: var(--green); }
+        .dot.inactive { background: var(--red); }
+        .dot.pending { background: var(--yellow); }
+        code {
+            background: var(--bg);
+            padding: 0.2rem 0.4rem;
+            border-radius: 4px;
+            font-size: 0.9rem;
+        }
+        .refresh-btn {
+            background: var(--card);
+            color: var(--accent);
+            border: 1px solid var(--accent);
+            border-radius: 6px;
+            padding: 0.5rem 1rem;
+            cursor: pointer;
+            font-size: 0.9rem;
+        }
+        .refresh-btn:hover { background: var(--accent); color: #0d1117; }
+        #last-updated { color: #8b949e; font-size: 0.85rem; margin-top: 0.5rem; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>ServerStream</h1>
+        <p class="subtitle">Mini multi-platform streaming server — powered by SRS</p>
+
+        <div class="card">
+            <h2>Server Status</h2>
+            <div class="status-grid">
+                <div class="status-item">
+                    <div class="label">SRS Server</div>
+                    <div class="value online" id="srs-status">Checking...</div>
+                </div>
+                <div class="status-item">
+                    <div class="label">Active Streams</div>
+                    <div class="value" id="active-streams">-</div>
+                </div>
+                <div class="status-item">
+                    <div class="label">Uptime</div>
+                    <div class="value" id="uptime">-</div>
+                </div>
+            </div>
+            <p id="last-updated"></p>
+        </div>
+
+        <div class="card">
+            <h2>OBS Connection</h2>
+            <div class="info-row">
+                <span class="key">Server URL</span>
+                <span class="val" id="rtmp-url">rtmp://<span class="server-ip">YOUR_SERVER_IP</span>/live</span>
+            </div>
+            <div class="info-row">
+                <span class="key">Stream Key</span>
+                <span class="val" id="stream-key">YOUR_STREAM_KEY</span>
+            </div>
+            <div class="info-row">
+                <span class="key">HLS Playback</span>
+                <span class="val" id="hls-url">http://<span class="server-ip">YOUR_SERVER_IP</span>:8080/live/livestream.m3u8</span>
+            </div>
+            <div class="info-row">
+                <span class="key">FLV Playback</span>
+                <span class="val" id="flv-url">http://<span class="server-ip">YOUR_SERVER_IP</span>:8080/live/livestream.flv</span>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>Platform Push Status</h2>
+            <ul class="platform-list" id="platform-list">
+                <li><span class="dot pending"></span> YouTube — <span id="yt-status">Not configured</span></li>
+                <li><span class="dot pending"></span> Facebook — <span id="fb-status">Not configured</span></li>
+                <li><span class="dot pending"></span> Twitch — <span id="tw-status">Not configured</span></li>
+                <li><span class="dot pending"></span> TikTok — <span id="tt-status">Not configured</span></li>
+            </ul>
+        </div>
+
+        <div class="card">
+            <h2>Quick Start</h2>
+            <ol style="padding-left: 1.5rem;">
+                <li>Copy your <strong>Server URL</strong> and <strong>Stream Key</strong> above</li>
+                <li>In OBS: Settings → Stream → Service: <code>Custom</code></li>
+                <li>Paste the Server URL and Stream Key</li>
+                <li>Click <strong>Start Streaming</strong> in OBS</li>
+                <li>Your stream goes live on all configured platforms</li>
+            </ol>
+        </div>
+    </div>
+
+    <script>
+        const host = window.location.hostname;
+        document.querySelectorAll('.server-ip').forEach(el => {
+            el.textContent = host;
+        });
+
+        async function fetchStatus() {
+            try {
+                const res = await fetch(`http://${host}:1985/api/v1/versions`);
+                const data = await res.json();
+                document.getElementById('srs-status').textContent = 'Online';
+                document.getElementById('srs-status').className = 'value online';
+            } catch (e) {
+                document.getElementById('srs-status').textContent = 'Offline';
+                document.getElementById('srs-status').className = 'value offline';
+            }
+
+            try {
+                const res = await fetch(`http://${host}:1985/api/v1/streams`);
+                const data = await res.json();
+                const streams = data.streams || [];
+                document.getElementById('active-streams').textContent = streams.length;
+            } catch (e) {
+                document.getElementById('active-streams').textContent = '-';
+            }
+
+            document.getElementById('last-updated').textContent = 'Last updated: ' + new Date().toLocaleTimeString();
+        }
+
+        fetchStatus();
+        setInterval(fetchStatus, 10000);
+    </script>
+</body>
+</html>

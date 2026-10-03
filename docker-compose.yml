@@ -1,0 +1,34 @@
+version: "3.8"
+
+services:
+  srs:
+    image: ossrs/srs:5
+    container_name: serversstream-srs
+    restart: unless-stopped
+    ports:
+      - "1935:1935"
+      - "1985:1985"
+      - "8080:8080"
+      - "1986:1986"
+    volumes:
+      - ./srs.conf:/usr/local/srs/conf/srs.conf:ro
+      - ./hooks:/usr/local/srs/hooks:ro
+      - srs-logs:/usr/local/srs/objs/logs
+    environment:
+      - CANDIDATE=${CANDIDATE:-}
+    command: >
+      ./objs/srs -c conf/srs.conf
+
+  web:
+    image: nginx:alpine
+    container_name: serversstream-web
+    restart: unless-stopped
+    ports:
+      - "8081:80"
+    volumes:
+      - ./web:/usr/share/nginx/html:ro
+    depends_on:
+      - srs
+
+volumes:
+  srs-logs:
