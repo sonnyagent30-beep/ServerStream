@@ -280,18 +280,45 @@ class Supervisor:
 
     # ---- SRS ----
     def active_streams(self) -> list[str]:
+        """Streams that currently have a *live publisher* attached.
+
+        SRS's /streams list can keep a stream entry alive for a while after its
+        publisher dies without a clean disconnect (killed container, pulled
+        network cable, black-holed socket). Acting on that stale entry would
+        leave the supervisor believing OBS is still live, so cross-check
+        /clients and only report streams with a publisher whose connection is
+        still alive.
+        """
         try:
-            r = httpx.get(f"{SRS_API}/api/v1/streams/", timeout=4)
-            r.raise_for_status()
-            data = r.json()
-            self.srs_online = True
-            self.last_poll = time.time()
-            return [s["name"] for s in data.get("streams", []) if s.get("name")]
+            streams = httpx.get(f"{SRS_API}/api/v1/streams/", timeout=4)
+            streams.raise_for_status()
+            named = {s["name"] for s in streams.json().get("streams", []) if s.get("name")}
         except Exception as exc:
             self.srs_online = False
             self.last_poll = time.time()
-            log.debug("SRS poll failed: %s", exc)
+            log.debug("SRS stream poll failed: %s", exc)
             return []
+
+        try:
+            clients = httpx.get(f"{SRS_API}/api/v1/clients/", timeout=4)
+            clients.raise_for_status()
+            pubs = [c for c in clients.json().get("clients", [])
+                    if c.get("publish") and c.get("name") in named]
+            live = {c["name"] for c in pubs}
+            # A stream entry with no attached publisher is stale; drop it.
+            stale = named - live
+            if stale:
+                log.warning("SRS lists stream(s) with no live publisher, "
+                            "treating as gone: %s", sorted(stale))
+        except Exception as exc:
+            # If /clients is unavailable we cannot verify; fall back to the
+            # stream list rather than wrongly dropping a healthy broadcast.
+            log.debug("SRS client poll failed, trusting stream list: %s", exc)
+            live = named
+
+        self.srs_online = True
+        self.last_poll = time.time()
+        return [s for s in named if s in live]
 
     def clients(self) -> dict[str, int]:
         try:
