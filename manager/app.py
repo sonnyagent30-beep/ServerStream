@@ -275,6 +275,7 @@ class Supervisor:
         self.source_since = 0.0          # when the current phase began
         self.last_live_seen = 0.0        # last time OBS was actually publishing
         self.cycles = 0                  # completed live->closed transitions
+        self._armed = False              # standby protection only after a real drop
         self._shutdown = threading.Event()
 
     # ---- SRS ----
@@ -304,52 +305,76 @@ class Supervisor:
 
     # ---- what should be running right now ----
     def _resolve_phase(self, streams: list[str], now: float) -> tuple[str, Optional[str]]:
-        """Return (phase, source_stream_to_feed) from observed SRS state."""
+        """Return (phase, source_stream_to_feed) from observed SRS state.
+
+        Idle vs standby is the important distinction here:
+
+          * **closed** - the broadcast is over. Nothing is being sent anywhere.
+            This is the state ServerStream sits in when it has never seen OBS,
+            or after the grace period expires.
+          * **standby** - OBS was publishing, then stopped. We deliberately keep
+            the platform feeds alive on the standby frame for STANDBY_SECONDS so
+            viewers do not see a frozen picture. This is a *reaction to a drop*,
+            not a default state.
+          * **live** - OBS is publishing.
+
+        Without an explicit armed flag, standby would also mean "never had OBS",
+        which is exactly the bug where the standby image gets pushed to every
+        platform on its own.
+        """
         live = [s for s in streams if s == INGEST_KEY]
         standby_up = STANDBY_STREAM in streams
+        was_armed = self._armed
 
         if live:
-            # OBS is up. Always prefer the real feed.
+            # OBS is up: arm standby protection and prefer the real feed.
             if self.phase != self.PHASE_LIVE:
                 log.info("phase -> LIVE (OBS publishing)")
-                self.cycles += 1
+                if not was_armed:
+                    self.cycles += 1
+            self._armed = True
             self.phase = self.PHASE_LIVE
             self.live_stream = INGEST_KEY
             self.last_live_seen = now
             self.source_since = now
             return self.PHASE_LIVE, INGEST_KEY
 
-        # No OBS and no standby image to fall back on: there is nothing to send.
-        # Close immediately rather than sit in a standby phase feeding a dead
-        # source, which would look live to viewers while carrying no video.
-        if standby_image_path() is None and not standby.running:
-            if self.phase != self.PHASE_CLOSED:
-                log.warning("no live source and no standby image - closing feeds")
-            self.phase = self.PHASE_CLOSED
-            self.live_stream = None
-            return self.PHASE_CLOSED, None
-
-        # No OBS. Decide between standby and closed.
-        if self.phase == self.PHASE_LIVE or self.phase == self.PHASE_CLOSED:
+        # No OBS. Only fall back to standby if we were actually live before,
+        # i.e. this is a genuine drop rather than a quiet server.
+        if was_armed:
+            # Even after a real drop, standby is only usable if there is a frame
+            # to send. Otherwise close rather than feed a dead source, which
+            # would look live to viewers while carrying no video.
+            if standby_image_path() is None and not standby.running:
+                log.warning("live source gone and no standby image - closing feeds")
+                self.phase = self.PHASE_CLOSED
+                self._armed = False
+                return self.PHASE_CLOSED, None
             if self.phase == self.PHASE_LIVE:
-                log.warning("OBS disconnected - holding on standby for %ss",
-                            STANDBY_SECONDS)
+                log.warning("OBS disconnected - holding on standby for %ss "
+                            "(viewers see the standby frame)", STANDBY_SECONDS)
+                self.source_since = now
             self.phase = self.PHASE_STANDBY
-            self.source_since = now
-            self.live_stream = None
-
-        elapsed = now - self.source_since
-        if STANDBY_SECONDS <= 0:
-            if self.phase != self.PHASE_CLOSED:
+            elapsed = now - self.source_since
+            if STANDBY_SECONDS <= 0:
                 log.info("standby disabled -> closing platform feeds")
+                self.phase = self.PHASE_CLOSED
+                self._armed = False
+                return self.PHASE_CLOSED, None
+            if elapsed >= STANDBY_SECONDS:
+                log.info("standby window of %ss elapsed - closing platform feeds "
+                         "(will auto-resume if OBS returns)", STANDBY_SECONDS)
+                self.phase = self.PHASE_CLOSED
+                self._armed = False
+                return self.PHASE_CLOSED, None
+            return self.PHASE_STANDBY, (STANDBY_STREAM if standby_up else None)
+
+        # Never seen OBS (or already closed) and OBS is still absent.
+        # Stay closed. Do not publish anything to the platforms.
+        if self.phase != self.PHASE_CLOSED:
+            log.info("phase -> CLOSED (no live source, standby not armed)")
             self.phase = self.PHASE_CLOSED
-            return self.PHASE_CLOSED, None
-        if elapsed >= STANDBY_SECONDS:
-            log.info("standby window of %ss elapsed - closing platform feeds "
-                     "(will auto-resume if OBS returns)", STANDBY_SECONDS)
-            self.phase = self.PHASE_CLOSED
-            return self.PHASE_CLOSED, None
-        return self.PHASE_STANDBY, (STANDBY_STREAM if standby_up else None)
+        return self.PHASE_CLOSED, None
 
     # ---- process lifecycle ----
     def _start(self, platform: dict[str, Any], source_stream: str) -> None:
@@ -449,6 +474,7 @@ class Supervisor:
             detail = {"feed": "closed", "seconds_left": 0}
         return {
             "phase": self.phase,
+            "armed": self._armed,
             "standby_seconds": STANDBY_SECONDS,
             "since": self.source_since,
             "cycles": self.cycles,
@@ -458,9 +484,14 @@ class Supervisor:
         }
 
     def force_close(self) -> None:
-        """Manual 'close the broadcast now' from the dashboard."""
+        """Manual 'close the broadcast now' from the dashboard.
+
+        Disarms standby as well, so the platforms stay closed until OBS
+        connects again rather than quietly dropping back to standby.
+        """
         self._stop_all("closed by operator")
         self.phase = self.PHASE_CLOSED
+        self._armed = False
 
     def stop_all(self) -> None:
         self._shutdown.set()

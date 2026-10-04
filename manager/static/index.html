@@ -33,6 +33,9 @@
   .phase.live{border-color:#1c4429}
   .phase.standby{border-color:#4a3a10}
   .phase.closed{border-color:#4d1f1c}
+  .phase.closed.idle{border-color:var(--border)}
+  .phase.closed.idle .dot{background:var(--muted);box-shadow:none}
+  .phase.closed.idle .lbl{color:var(--muted)}
   .phase .lbl{font-size:1.05rem;font-weight:600}
   .phase.live .lbl{color:var(--green)}
   .phase.standby .lbl{color:var(--yellow)}
@@ -170,10 +173,11 @@
         <div class="actions">
           <button class="btn ghost sm" id="sbReset">Restore default</button>
         </div>
-        <p class="hint">Shown to viewers when OBS drops, so the platform feed never
-          shows a frozen frame. Streams close after
-          <strong id="sbSecs">&ndash;</strong>s without a source &mdash; then resume
-          automatically as soon as OBS returns.</p>
+        <p class="hint">Used <em>only</em> to cover a drop: once OBS has been live
+          and then stops, viewers see this frame for up to
+          <strong id="sbSecs">&ndash;</strong>s while ServerStream waits for OBS to
+          come back. It is never broadcast on its own &mdash; with no live source
+          the platform feeds stay closed.</p>
       </div>
     </div>
   </div>
@@ -266,7 +270,8 @@ function render(){
 
   // ---- phase banner ----
   const ph = $("#phase");
-  ph.className = "phase " + (b.phase || "closed");
+  // "closed" while idle is normal, not a fault - style it neutral.
+  ph.className = "phase " + (b.phase || "closed") + (b.phase === "closed" && !b.armed ? " idle" : "");
   if(b.phase === "live"){
     $("#phaseLbl").textContent = "Live";
     $("#phaseDetail").textContent = "OBS is publishing \u2014 platforms are receiving the live feed.";
@@ -276,9 +281,12 @@ function render(){
     $("#phaseDetail").textContent = "OBS is not sending. Viewers see the standby image. " +
       "If OBS returns first, streaming resumes automatically.";
   } else {
-    $("#phaseLbl").textContent = "Closed";
-    $("#phaseDetail").textContent = "No source. Platforms are disconnected. " +
-      "Streaming will start by itself when OBS connects.";
+    $("#phaseLbl").textContent = "Closed \u2014 not broadcasting";
+    $("#phaseDetail").textContent = b.armed
+      ? "No source. Platforms are disconnected."
+      : "Nothing is being sent to the platforms. Start streaming in OBS and " +
+        "everything comes up by itself \u2014 the standby frame is only ever used " +
+        "to cover a drop after a live stream.";
   }
 
   // ---- stats ----
