@@ -234,7 +234,7 @@ python tests/test_app.py      # auth gate, CSRF, key masking, standby API, inges
 python tests/test_phase.py    # live → standby → closed → auto-resume
 ```
 
-No Docker or network needed; both exit non-zero on failure.
+No Docker or network needed; all exit non-zero on failure.
 
 For an end-to-end check against a real endpoint (spawns a throwaway SRS as a
 fake platform plus a test-pattern RTMPS publisher, then cleans up):
@@ -246,6 +246,12 @@ ssh root@your.host 'bash /tmp/acc.sh'
 
 It asserts the full cycle: idle sends nothing → OBS live → standby covers a
 hard kill → operator close sticks → unattended auto-resume.
+
+`tests/test_content_type.py` and `tests/test_ui_headers.mjs` guard a real
+production bug: `fetch()` sends a string body as `text/plain` unless told
+otherwise, so the server received every dashboard write as a raw string and
+rejected it with *"Input should be a valid dictionary or object"*. The client
+now declares its JSON body and the server tolerates mislabelled JSON.
 
 ## Contributing
 

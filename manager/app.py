@@ -537,6 +537,28 @@ supervisor = Supervisor()
 # --------------------------------------------------------------------------
 app = FastAPI(title="ServerStream", version="1.0.0")
 
+# fetch() auto-fills Content-Type: text/plain;charset=UTF-8 whenever a request
+# carries a string body and no explicit Content-Type. Starlette then hands the
+# body to the endpoint as a raw *string* instead of parsing it, and it surfaces
+# as a Pydantic "Input should be a valid dictionary" error that says nothing
+# useful. Accept mislabelled JSON rather than failing that way.
+#
+# Deliberately narrow: only a missing or text/plain content type is rewritten,
+# so real form uploads (multipart/form-data, urlencoded) are left alone.
+_JSON_WRITE_METHODS = frozenset({"POST", "PUT", "PATCH"})
+
+
+@app.middleware("http")
+async def coerce_json_content_type(request: Request, call_next):
+    ctype = request.headers.get("content-type", "")
+    bare = ctype.split(";", 1)[0].strip().lower()
+    if request.method in _JSON_WRITE_METHODS and bare in ("", "text/plain"):
+        request.scope["headers"] = [
+            (k, v) for k, v in request.scope.get("headers", [])
+            if k.lower() != b"content-type"
+        ] + [(b"content-type", b"application/json")]
+    return await call_next(request)
+
 
 
 # --------------------------------------------------------------------------

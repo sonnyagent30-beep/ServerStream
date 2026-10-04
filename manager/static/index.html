@@ -242,7 +242,12 @@ function readToken(){
 async function api(path, opts){
   const o = Object.assign({headers:{}}, opts||{});
   o.headers = Object.assign({}, o.headers);
-  if(!String(o.headers["Content-Type"] && "") && opts && opts.body)
+  // A JSON body must be declared explicitly. If it is not, fetch() silently
+  // sends text/plain;charset=UTF-8 and the server receives the body as a raw
+  // string instead of a parsed object.
+  const hasContentType = Object.keys(o.headers)
+    .some(k => k.toLowerCase() === "content-type");
+  if(o.body && !hasContentType)
     o.headers["Content-Type"] = "application/json";
   if(TOKEN) o.headers["X-SS-Token"] = TOKEN;
   const r = await fetch(path, o);
