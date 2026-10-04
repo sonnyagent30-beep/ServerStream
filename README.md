@@ -236,6 +236,17 @@ python tests/test_phase.py    # live → standby → closed → auto-resume
 
 No Docker or network needed; both exit non-zero on failure.
 
+For an end-to-end check against a real endpoint (spawns a throwaway SRS as a
+fake platform plus a test-pattern RTMPS publisher, then cleans up):
+
+```bash
+scp scripts/acceptance.sh root@your.host:/tmp/acc.sh
+ssh root@your.host 'bash /tmp/acc.sh'
+```
+
+It asserts the full cycle: idle sends nothing → OBS live → standby covers a
+hard kill → operator close sticks → unattended auto-resume.
+
 ## Contributing
 
 Issues and PRs welcome. Two things the project cares about:
