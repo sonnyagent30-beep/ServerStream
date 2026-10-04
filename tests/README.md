@@ -6,6 +6,7 @@ Unit/integration tests for the manager. No docker or network required.
 python -m pip install "fastapi" "uvicorn[standard]" "httpx"
 python tests/test_app.py      # auth gate, CSRF, key masking, standby API
 python tests/test_phase.py    # live -> standby -> closed -> auto-resume machine
+python tests/test_streams.py  # stale SRS entries / dead-publisher detection
 ```
 
 Both exit non-zero on failure, so they work in CI.
