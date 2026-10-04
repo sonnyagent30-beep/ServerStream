@@ -3,15 +3,12 @@ services:
     image: ossrs/srs:5
     container_name: serversstream-srs
     restart: unless-stopped
-    environment:
-      SRS_VHOST_HLS_HLS_FRAGMENT: "3"
-      SRS_VHOST_HLS_HLS_WINDOW: "10"
     volumes:
       - ./srs.conf:/usr/local/srs/conf/srs.conf:ro
       - ./logs/srs:/usr/local/srs/objs/logs
     command: ["./objs/srs", "-c", "conf/srs.conf"]
     ports:
-      - "127.0.0.1:8080:8080"   # HLS/FLV playback, proxied by host nginx
+      - "127.0.0.1:8080:8080"   # HTTP-FLV playback (internal diagnostics only)
     networks: [ss]
 
   manager:
@@ -27,9 +24,13 @@ services:
       PUBLIC_HOST: ${PUBLIC_HOST:-localhost}
       PUBLIC_RTMP_PORT: "1935"
       PUBLIC_RTMPS_PORT: "1936"
+      ADMIN_USER: ${ADMIN_USER:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      STANDBY_SECONDS: ${STANDBY_SECONDS:-120}
+      STANDBY_IMAGE: /data/standby.jpg
       DB_PATH: /data/serversstream.db
       LOG_DIR: /data/logs
-      POLL_INTERVAL: "5"
+      POLL_INTERVAL: "4"
     volumes:
       - manager-data:/data
     ports:
