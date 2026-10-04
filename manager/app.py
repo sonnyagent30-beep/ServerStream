@@ -910,11 +910,16 @@ async def on_publish(request: Request) -> PlainTextResponse:
         return PlainTextResponse("1")
     app_name = body.get("app", "")
     stream = body.get("stream", "")
-    if app_name != INGEST_APP or stream != INGEST_KEY:
+    # The standby publisher is our own internal process, not an outside
+    # publisher, so it must be allowed through even though its stream name is
+    # not the operator's key. Everything else still requires the exact key.
+    internal = (stream == STANDBY_STREAM and app_name == INGEST_APP)
+    if not internal and (app_name != INGEST_APP or stream != INGEST_KEY):
         log.warning("ingest REJECTED app=%r stream=%r ip=%s",
                     app_name, stream, body.get("ip"))
         return PlainTextResponse("1")
-    log.info("ingest ALLOWED app=%r stream=%r ip=%s", app_name, stream, body.get("ip"))
+    log.info("ingest ALLOWED app=%r stream=%r ip=%s%s",
+             app_name, stream, body.get("ip"), " (standby)" if internal else "")
     return PlainTextResponse("0")
 
 

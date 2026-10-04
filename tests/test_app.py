@@ -88,6 +88,32 @@ print("\n== health stays open ==")
 r = c.get("/api/health")
 check("health needs no auth", r.status_code == 200, r.status_code)
 
+
+print("\n== ingest hook: standby must be allowed, others rejected ==")
+import asyncio
+# (a) the standby stream is ours -> allowed
+r = c.post("/api/hooks/on_publish",
+           json={"app":"live","stream":"standby","ip":"172.18.0.3"})
+check("standby publish allowed", r.status_code==200 and r.text.strip()=="0", (r.status_code, r.text))
+# (b) the real key -> allowed
+r = c.post("/api/hooks/on_publish",
+           json={"app":"live","stream":A.INGEST_KEY,"ip":"1.2.3.4"})
+check("correct ingest key allowed", r.text.strip()=="0", r.text)
+# (c) a wrong key -> rejected
+r = c.post("/api/hooks/on_publish",
+           json={"app":"live","stream":"wrongkey","ip":"1.2.3.4"})
+check("wrong ingest key rejected", r.text.strip()!="0", r.text)
+# (d) wrong app -> rejected
+r = c.post("/api/hooks/on_publish",
+           json={"app":"other","stream":A.INGEST_KEY,"ip":"1.2.3.4"})
+check("wrong app rejected", r.text.strip()!="0", r.text)
+
+print("\n== ingest hook needs no session ==")
+c2 = TestClient(A.app)
+r = c2.post("/api/hooks/on_publish", json={"app":"live","stream":"nope","ip":"1.1.1.1"})
+check("hook reachable without login (SRS is internal)", r.status_code==200, r.status_code)
+check("hook rejects unknown key without login", r.text.strip()!="0", r.text)
+
 print("\n== logout ==")
 r = c.post("/api/auth/logout", headers={"X-SS-Token": tok})
 check("logout 200", r.status_code == 200, r.status_code)
