@@ -16,6 +16,7 @@
 #   3. when OBS is hard-killed, standby takes over within seconds
 #   4. after the operator closes, it stays closed and never drifts back
 #   5. when OBS returns unattended, streaming auto-resumes
+#   6. dashboard writes sent as text/plain are parsed (the fetch() footgun)
 #
 # Exits non-zero if any assertion fails.
 C="curlimages/curl:latest"
@@ -35,6 +36,21 @@ echo "### clean baseline established (manager restarted, no OBS publishers)"
 echo
 
 xc(){ docker exec sscli curl -s "$@"; }
+
+# Test platforms are named "ZZ ...". Purge leftovers by NAME rather than a
+# captured id: a run that dies midway must not leave junk in the registry.
+purge_test_platforms(){
+  local ids
+  ids=$(xc -b /j/c http://manager:8081/api/state | python3 -c "
+import json,sys
+for p in json.load(sys.stdin)['platforms']:
+    if p['name'].startswith('ZZ'): print(p['id'])" 2>/dev/null)
+  for id in $ids; do
+    xc -b /j/c -X DELETE -H "X-SS-Token: $TOK" \
+       "http://manager:8081/api/platforms/$id" >/dev/null 2>&1
+  done
+}
+
 xc -c /j/c -X POST -H "Content-Type: application/json" \
    -d "{\"username\":\"admin\",\"password\":\"$PW\"}" http://manager:8081/api/auth/login >/dev/null
 TOK=$(xc -b /j/c http://manager:8081/api/auth/me | python3 -c "import json,sys;print(json.load(sys.stdin).get('csrf_token',''))")
@@ -120,7 +136,25 @@ docker run -d --rm --network host --name obsG linuxserver/ffmpeg:latest \
 sleep 18; show "OBS back"; sinkb
 t "phase is live"        "$(field phase)" "live"
 
+echo
+echo "TEST 6  dashboard writes sent as text/plain are still parsed (regression)"
+# fetch() labels a string body text/plain unless told otherwise. The dashboard
+# shipped without that header, so every write failed with "Input should be a
+# valid dictionary or object to extract fields from".
+NEW=$(xc -b /j/c -X POST \
+   -H "Content-Type: text/plain;charset=UTF-8" -H "X-SS-Token: $TOK" \
+   -d '{"name":"ZZ content-type probe","full_url":"rtmp://sink:1935/live/probe","enabled":true}' \
+   http://manager:8081/api/platforms | python3 -c "import json,sys
+try: print(json.load(sys.stdin).get('id',''))
+except Exception: print('')")
+t "create with text/plain body" "$([ -n "$NEW" ] && echo created || echo missing)" "created"
+t "the exact call from the bug report works" \
+  "$(xc -b /j/c -X PATCH -H "Content-Type: text/plain;charset=UTF-8" -H "X-SS-Token: $TOK" \
+      -d '{"enabled":false}' http://manager:8081/api/platforms/$NEW \
+     | python3 -c 'import json,sys;print(int(bool(json.load(sys.stdin).get("enabled"))))')" "0"
+
 xc -b /j/c -X DELETE -H "X-SS-Token: $TOK" http://manager:8081/api/platforms/$PID >/dev/null
+purge_test_platforms
 docker rm -f sink sscli obsG >/dev/null 2>&1
 echo
 echo "================ $pass passed, $fail failed ================"
