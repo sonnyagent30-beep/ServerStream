@@ -2,14 +2,36 @@
 # ServerStream deploy / update script. Safe to re-run.
 set -euo pipefail
 
-DOMAIN="${DOMAIN:-sonnystream.duckdns.org}"
+# SS_HOSTNAME: your domain or bare IP that OBS will connect to.
+#   Required, and deliberately prefixed: HOSTNAME is a standard environment
+#   variable on many systems (Windows, systemd), so reading it would silently
+#   pick up the machine's own name instead of the domain you meant. There is no
+#   default either - a wrong default would point certificates and nginx
+#   server_name at somebody else's server.
+SS_HOSTNAME="${SS_HOSTNAME:-${DOMAIN:-}}"
 PROJECT_DIR="${PROJECT_DIR:-/opt/serversstream}"
 REPO="${REPO:-https://github.com/sonnyagent30-beep/ServerStream.git}"
 EMAIL="${EMAIL:-}"
 
 say(){ printf "\n\033[1;34m==> %s\033[0m\n" "$*"; }
 
-[ "$(id -u)" -eq 0 ] || { echo "run as root"; exit 1; }
+if [ -z "${SS_HOSTNAME}" ]; then
+  cat >&2 <<'USAGE'
+Usage: sudo ./scripts/deploy.sh SS_HOSTNAME=your.domain [ADMIN_PASSWORD=...]
+
+  SS_HOSTNAME     (required) domain or IP that OBS connects to
+  ADMIN_PASSWORD  admin password for the dashboard (prompted if omitted)
+  EMAIL           optional email for the ACME account
+
+Example:
+  sudo ./scripts/deploy.sh SS_HOSTNAME=stream.example.com
+USAGE
+  exit 2
+fi
+DOMAIN="${SS_HOSTNAME}"
+
+[ "$(id -u)" -eq 0 ] || { echo "run as root (use sudo)"; exit 1; }
+
 
 say "Fetching ServerStream into $PROJECT_DIR"
 if [ -d "$PROJECT_DIR/.git" ]; then
@@ -22,15 +44,36 @@ fi
 cd "$PROJECT_DIR"
 
 say "Environment"
+NEW_ENV=0
 if [ ! -f .env ]; then
   cp .env.example .env
-  KEY="$(head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 32)"
+  NEW_ENV=1
+  KEY="$(head -c 48 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 40)"
   sed -i "s|^STREAM_KEY=.*|STREAM_KEY=${KEY}|" .env
   sed -i "s|^PUBLIC_HOST=.*|PUBLIC_HOST=${DOMAIN}|" .env
   echo "  created .env with a generated stream key"
 else
   echo "  .env already present, leaving it alone"
 fi
+
+# Dashboard credentials. Prompted when not supplied so the password never
+# lands in shell history or a CI log.
+ADMIN_PASSWORD="${ADMIN_PASSWORD:-}"
+if [ -z "${ADMIN_PASSWORD}" ] && [ "${NEW_ENV}" -eq 1 ]; then
+  read -r -s -p "Dashboard admin password: " ADMIN_PASSWORD; echo
+fi
+if [ -n "${ADMIN_PASSWORD}" ]; then
+  ESCAPED="$(printf '%s' "${ADMIN_PASSWORD}" | sed 's/[\\&|]/\\&/g')"
+  if grep -q '^ADMIN_PASSWORD=' .env; then
+    sed -i "s|^ADMIN_PASSWORD=.*|ADMIN_PASSWORD=${ESCAPED}|" .env
+  else
+    printf '\nADMIN_USER=%s\nADMIN_PASSWORD=%s\n' \
+      "${ADMIN_USER:-admin}" "${ESCAPED}" >> .env
+  fi
+  echo "  dashboard admin password set"
+fi
+chmod 600 .env
+
 set -a; . ./.env; set +a
 
 say "Firewall"
@@ -53,10 +96,13 @@ else
 fi
 
 say "Host nginx vhost"
-cp nginx/serversstream.conf /etc/nginx/sites-available/serversstream
+sed "s|__DOMAIN__|${DOMAIN}|g" nginx/serversstream.conf > /etc/nginx/sites-available/serversstream
 ln -sf /etc/nginx/sites-available/serversstream /etc/nginx/sites-enabled/serversstream
 nginx -t && systemctl reload nginx
 echo "  nginx reloaded"
+
+say "Edge (RTMPS) config"
+sed "s|__DOMAIN__|${DOMAIN}|g" edge/nginx.conf > edge/nginx.conf.rendered
 
 say "Containers"
 docker compose up -d --build --remove-orphans

@@ -15,3 +15,6 @@ __pycache__/
 Thumbs.db
 .vscode/
 .idea/
+
+# rendered at deploy time from the __DOMAIN__ template
+edge/nginx.conf.rendered
