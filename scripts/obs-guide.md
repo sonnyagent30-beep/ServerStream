@@ -52,10 +52,12 @@ Prefer plain RTMP (lower CPU, no TLS)? Use `rtmp://YOUR_DOMAIN:1935/live`.
 Click **Start Streaming**. Within a few seconds each enabled platform should
 flip to **restreaming** on the dashboard.
 
-If OBS or the server drops, viewers see your **standby image** rather than a
-frozen frame, and streams resume on the real feed automatically once OBS is
-back — as long as that happens within the grace period (`STANDBY_SECONDS`,
-default 120 s).
+If OBS drops, viewers see your **standby image** rather than a frozen frame.
+After `STANDBY_SECONDS` (default 120) with no source, ServerStream closes the
+platform feeds cleanly instead of leaving a dead broadcast running.
+
+**If OBS comes back later, streaming resumes by itself** — no one needs to be
+at the laptop. Nothing is buffered, so this adds no latency.
 
 ## 5. Verify on each platform
 

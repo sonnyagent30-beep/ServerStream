@@ -1,17 +1,3 @@
-> **Status: work in progress.**
-> Shipped and verified: RTMP/RTMPS ingest, multi-platform restreaming via ffmpeg
-> (including RTMPS for Facebook), HLS preview, stream-key ingest auth, web UI.
->
-> **Not yet implemented** — described below because they are the next commits,
-> but do not expect them in a fresh clone yet:
-> - **Dashboard login** — currently there is **no authentication**. Treat any
->   deployment on a public IP as open, and see *Security* below.
-> - **Standby image + drop handling** — `STANDBY_SECONDS` is not read yet.
-> - **Stream-key masking in API responses** — `/api/state` currently returns
->   platform stream keys in plain text.
->
-> If you deploy this today, put it behind your own reverse-proxy auth or a VPN.
-
 # ServerStream
 
 **Stream once from OBS. Go live on YouTube, Facebook, Twitch and TikTok at the
@@ -21,19 +7,18 @@ Self-hosted, free, MIT. No per-platform fees, no vendor lock-in, nothing to
 upload your video to.
 
 ```
-                     ┌───────────────┐
-  OBS ──RTMP(S)────► │ edge (nginx)  │  TLS termination for RTMPS
-                     └───────┬───────┘
-                             ▼
-                     ┌───────────────┐        ┌──────────────┐
-                     │      SRS      │◄──────►│   manager    │  registry + UI
-                     │ RTMP + HLS    │        │  (FastAPI)   │  ingest auth
-                     └───────┬───────┘        └──────┬───────┘
-                             │ local copy            │ supervises ffmpeg
-                             ▼                       ▼
-                     HLS / FLV preview     YouTube · Facebook · Twitch · …
-
-  standby image ──ffmpeg loop──► same vhost ──┘   (covers OBS drops)
+  OBS ──RTMP(S)────► edge (nginx :1935 / :1936)   TLS termination for RTMPS
+                            │
+                            ▼
+                     ┌───────────────┐      ┌──────────────┐
+                     │      SRS      │◄────►│   manager    │  auth + registry
+                     │  RTMP hub     │      │  (FastAPI)   │  live/standby/closed
+                     └───────┬───────┘      └──────┬───────┘
+                             │                     │ supervises one ffmpeg per platform
+                             ▼                     ▼
+                       standby image ──►  YouTube · Facebook · Twitch · …
+                       (ffmpeg loop)      (each gets the live feed, or the
+                                            standby frame when OBS drops)
 ```
 
 ---
@@ -132,46 +117,57 @@ Full guide: [`scripts/obs-guide.md`](scripts/obs-guide.md).
 
 ---
 
-## Standby / drop handling
-
-| Setting | Meaning |
-|---------|---------|
-| `STANDBY_SECONDS=120` | Grace period before closing platform feeds |
-| `STANDBY_SECONDS=0` | Disable standby; platform feeds die the instant OBS does |
-
-This is **not** a delay buffer. Nothing is buffered, so latency is unchanged —
-the standby image simply covers the gap. That is the difference from a rolling
-buffer, which would add its full length as latency and break anything
-interactive (praise, altar call, "can you see me?").
-
-If OBS returns within the grace period, streams resume on the real feed
-automatically. If it does not, the broadcast is closed deliberately — start a
-new one from the dashboard.
-
 ---
 
 ## Security
 
-Implemented today:
+- **Single-admin login is mandatory.** Stream keys are credentials. A dashboard
+  on a public IP without auth hands every platform to whoever asks.
+- **Stream keys never leave the server.** Every API response is masked
+  (`mask_secret` / `mask_url`), and query-parameter secrets are redacted even
+  if a platform URL is unusual. This holds regardless of auth state.
+- **CSRF protection** — session cookie is `SameSite=Strict` and mutations
+  require an `X-SS-Token` header.
+- **Ingest is stream-key authenticated.** SRS calls the manager's `on_publish`
+  hook and rejects anything that is not your key. (The internal standby
+  publisher is the one exception, explicitly allow-listed.)
+- **RTMPS ingest** on 1936 for an encrypted OBS → server leg.
 
-- **Ingest is stream-key authenticated.** SRS asks the manager before accepting
-  a publisher; anything without the right key is rejected. Verified working.
-- **RTMPS ingest** on port 1936 for an encrypted OBS → server leg.
-- `.env` is gitignored; only `.env.example` is committed.
+Credentials live in `.env` (gitignored, `chmod 600`). To rotate the admin
+password, edit `ADMIN_PASSWORD` and `docker compose up -d manager`.
 
-**Known gaps, fixed in upcoming commits:**
+## Standby / drop handling
 
-- No dashboard authentication yet.
-- `/api/state` returns platform stream keys unmasked.
+The failure mode this exists for: a restreamer pulling `rtmp://your-server/live/key`
+has nothing to read the instant OBS disconnects, so it exits — and every
+platform goes dark.
 
-Until those land, run behind your own auth (nginx basic auth, a VPN, or a
-firewall rule) if the host is reachable from the internet.
+ServerStream keeps a **standby image** publishing as a second RTMP source on
+the same vhost. The supervisor then moves the platform restreamers between
+sources:
 
-If you need to share a view-only dashboard, put basic auth on the `location /`
-block in `nginx/serversstream.conf` and leave `/live/` open so playback keeps
-working.
+| Phase | Trigger | What platforms receive |
+|-------|---------|------------------------|
+| `live` | OBS publishing | the real OBS feed |
+| `standby` | OBS gone | the standby image, with a countdown |
+| `closed` | `STANDBY_SECONDS` elapsed, or operator | nothing — the broadcast ends cleanly |
 
----
+**Recovery is automatic.** When OBS publishes again — at any later point, with
+nobody at the laptop — the supervisor notices on its next poll and puts the
+restreamers back on the live feed. That is deliberate: unattended church streams
+must recover by themselves.
+
+Because nothing is buffered, latency is unchanged. The standby frame covers the
+gap; it does not delay anything. That is the difference from a rolling buffer,
+which would add its full length as latency.
+
+| Setting | Default | Meaning |
+|---------|---------|---------|
+| `STANDBY_SECONDS` | `120` | Grace period before closing platform feeds |
+| `STANDBY_SECONDS=0` | — | Disable standby; feeds die the instant OBS does |
+
+If no standby image is available, ServerStream closes rather than feeding a
+dead source, so viewers never see a "live" label with no video behind it.
 
 ## API
 
@@ -182,14 +178,24 @@ All endpoints require a session cookie unless noted.
 | `GET` | `/api/health` | Liveness (no auth) |
 | `POST` | `/api/auth/login` | Log in |
 | `POST` | `/api/auth/logout` | Log out |
+| `POST` | `/api/auth/login` | Log in (sets `ss_session` + `ss_token`) |
+| `POST` | `/api/auth/logout` | Log out |
+| `GET` | `/api/auth/me` | Current session + CSRF token |
 | `GET` | `/api/state` | Everything the dashboard needs |
-| `GET` | `/api/platforms` | List targets |
+| `GET` | `/api/platforms` | List targets (keys masked) |
 | `POST` | `/api/platforms` | Add a target |
 | `PATCH` | `/api/platforms/{id}` | Update / enable / disable |
 | `DELETE` | `/api/platforms/{id}` | Remove |
-| `GET` | `/api/standby` | Current standby image |
-| `POST` | `/api/standby` | Upload a standby image |
+| `GET` | `/api/standby` | Standby image status |
+| `GET` | `/api/standby/image` | The standby frame (public) |
+| `POST` | `/api/standby` | Upload a standby image (data-URL) |
+| `DELETE` | `/api/standby` | Restore the bundled default |
+| `POST` | `/api/broadcast/close` | Operator override — end all feeds now |
 | `GET` | `/api/srs/streams` | Raw SRS stream list |
+
+Unauthenticated: `GET /api/health`, `GET /login`, `GET /static/*`,
+`GET /api/standby/image`, and the SRS `on_publish`/`on_unpublish` hooks
+(internal, called by SRS itself).
 
 ---
 
@@ -215,8 +221,25 @@ Per-platform FFmpeg logs appear in the dashboard under each platform row.
 | Platform drops every ~30 s | Bitrate above your upload, or keyframe interval ≠ 2 s |
 | Standby image never appears | No standby image uploaded yet |
 | Nothing after `deploy.sh` | `docker compose ps` and `docker compose logs manager` |
-| HLS preview 404 | Stream name is your *stream key*, not `livestream` |
 
 ## License
 
 MIT
+
+## Tests
+
+```bash
+python -m pip install "fastapi" "uvicorn[standard]" "httpx"
+python tests/test_app.py      # auth gate, CSRF, key masking, standby API, ingest hook
+python tests/test_phase.py    # live → standby → closed → auto-resume
+```
+
+No Docker or network needed; both exit non-zero on failure.
+
+## Contributing
+
+Issues and PRs welcome. Two things the project cares about:
+
+1. **Never commit a secret.** `.env` is gitignored and only `.env.example` ships.
+2. **Keep it portable.** No hostnames, IPs, or provider assumptions baked into
+   shipped files — `deploy.sh` takes `SS_HOSTNAME` and templates `__DOMAIN__`.
