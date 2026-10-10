@@ -51,7 +51,7 @@ cleanly rather than leaving a dead broadcast running.
 ```bash
 git clone https://github.com/sonnyagent30-beep/ServerStream.git
 cd ServerStream
-sudo ./scripts/deploy.sh SS_HOSTNAME=your.domain
+sudo SS_HOSTNAME=your.domain ./scripts/deploy.sh
 ```
 
 The script is idempotent — re-run it any time to update. It will:
@@ -176,8 +176,6 @@ All endpoints require a session cookie unless noted.
 | Method | Path | Purpose |
 |--------|------|---------|
 | `GET` | `/api/health` | Liveness (no auth) |
-| `POST` | `/api/auth/login` | Log in |
-| `POST` | `/api/auth/logout` | Log out |
 | `POST` | `/api/auth/login` | Log in (sets `ss_session` + `ss_token`) |
 | `POST` | `/api/auth/logout` | Log out |
 | `GET` | `/api/auth/me` | Current session + CSRF token |

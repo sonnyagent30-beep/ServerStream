@@ -17,14 +17,14 @@ say(){ printf "\n\033[1;34m==> %s\033[0m\n" "$*"; }
 
 if [ -z "${SS_HOSTNAME}" ]; then
   cat >&2 <<'USAGE'
-Usage: sudo ./scripts/deploy.sh SS_HOSTNAME=your.domain [ADMIN_PASSWORD=...]
+Usage: sudo SS_HOSTNAME=your.domain ./scripts/deploy.sh [ADMIN_PASSWORD=...]
 
-  SS_HOSTNAME     (required) domain or IP that OBS connects to
+  SS_HOSTNAME     (required) domain or IP that OBS connects to (env var)
   ADMIN_PASSWORD  admin password for the dashboard (prompted if omitted)
   EMAIL           optional email for the ACME account
 
 Example:
-  sudo ./scripts/deploy.sh SS_HOSTNAME=stream.example.com
+  sudo SS_HOSTNAME=stream.example.com ./scripts/deploy.sh
 USAGE
   exit 2
 fi
@@ -59,8 +59,12 @@ fi
 # Dashboard credentials. Prompted when not supplied so the password never
 # lands in shell history or a CI log.
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-}"
-if [ -z "${ADMIN_PASSWORD}" ] && [ "${NEW_ENV}" -eq 1 ]; then
-  read -r -s -p "Dashboard admin password: " ADMIN_PASSWORD; echo
+if [ -z "${ADMIN_PASSWORD}" ]; then
+  if [ "${NEW_ENV}" -eq 1 ]; then
+    read -r -s -p "Dashboard admin password: " ADMIN_PASSWORD; echo
+  elif [ "${FORCE_PASSWORD:-0}" = "1" ]; then
+    read -r -s -p "Dashboard admin password: " ADMIN_PASSWORD; echo
+  fi
 fi
 if [ -n "${ADMIN_PASSWORD}" ]; then
   ESCAPED="$(printf '%s' "${ADMIN_PASSWORD}" | sed 's/[\\&|]/\\&/g')"
@@ -71,6 +75,9 @@ if [ -n "${ADMIN_PASSWORD}" ]; then
       "${ADMIN_USER:-admin}" "${ESCAPED}" >> .env
   fi
   echo "  dashboard admin password set"
+elif [ "${NEW_ENV}" -eq 1 ]; then
+  echo "  WARNING: .env.example has ADMIN_PASSWORD=change-me; leaving it as-is."
+  echo "  Set a real password with: sudo ./scripts/deploy.sh SS_HOSTNAME=$DOMAIN ADMIN_PASSWORD=..."
 fi
 chmod 600 .env
 

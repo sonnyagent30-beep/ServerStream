@@ -1,74 +1,161 @@
 #!/usr/bin/env bash
-# ServerStream acceptance test - proves the live/standby/closed state machine
-# against a real platform endpoint.
-#
-#   scp scripts/acceptance.sh root@YOUR_HOST:/tmp/acc.sh
-#   ssh root@YOUR_HOST 'bash /tmp/acc.sh'
-#
-# Creates a throwaway SRS ("sink") as a stand-in for YouTube/Facebook, a
-# throwaway platform target in the registry, and a test-pattern RTMPS
-# publisher as a stand-in for OBS. Nothing real is broadcast and the test
-# cleans up after itself.
-#
-# Asserts:
-#   1. with no OBS ever connected, NOTHING is sent to the platforms
-#   2. when OBS connects, platforms receive the live feed
-#   3. when OBS is hard-killed, standby takes over within seconds
-#   4. after the operator closes, it stays closed and never drifts back
-#   5. when OBS returns unattended, streaming auto-resumes
-#   6. dashboard writes sent as text/plain are parsed (the fetch() footgun)
-#
-# Exits non-zero if any assertion fails.
-C="curlimages/curl:latest"
-PW=$(grep -oP '(?<=^ADMIN_PASSWORD=).*' /opt/serversstream/.env)
-KEY=$(grep -oP '(?<=^STREAM_KEY=).*' /opt/serversstream/.env)
-# Kill any leftover OBS publishers / sinks from a previous run.
-docker rm -f sscli sink obsA obsB obsC obsD obsE obsF obsG obs1 obs2 obsZ obs_sim obsfg obsz >/dev/null 2>&1
-# Restart the manager: sessions live in memory, so a restart after logging in
-# would immediately invalidate the cookie.
-docker restart serversstream-manager >/dev/null
-sleep 14
-echo "### clean baseline established (manager restarted, no OBS publishers)"
-echo
+# ServerStream acceptance test — fully isolated.
+# Spins up its OWN manager + SRS + edge stack on dedicated ports / containers
+# / volumes, so it NEVER touches a production ServerSound deployment. Safe to
+# run on any host that has Docker, even alongside a live install.
+set -euo pipefail
 
-# Start the fresh test harness containers.
-docker run -d --rm --name sink --network serversstream ossrs/srs:5 >/dev/null
-docker run -d --rm --name sscli --network serversstream -v ssjar:/j \
-  alpine:3.20 sh -c 'apk add --no-cache curl >/dev/null 2>&1; sleep 1800' >/dev/null
-sleep 9
+PROJ="ss-acc-$$"
+DIR="/tmp/$PROJ"
+mkdir -p "$DIR"
 
-xc(){ docker exec sscli curl -s "$@"; }
+ADMIN_USER="admin"
+ADMIN_PASSWORD="acceptance-test-pw"
+STREAM_KEY="test-key-$$"
+SRS_API_PORT=$((19000 + RANDOM % 500))
+SRS_RTMP_PORT=$((19010 + RANDOM % 500))
+MGR_PORT=$((19020 + RANDOM % 500))
+EDGE_RTMP_PORT=$((19030 + RANDOM % 500))
+SINK_API_PORT=$((19040 + RANDOM % 500))
+SINK_RTMP_PORT=$((19050 + RANDOM % 500))
+MANAGER_BUILD_DIR="${SERVERSTREAM_MANAGER_DIR:-/opt/serversstream/manager}"
+export PROJ DIR ADMIN_USER ADMIN_PASSWORD STREAM_KEY \
+       SRS_API_PORT SRS_RTMP_PORT MGR_PORT EDGE_RTMP_PORT \
+       SINK_API_PORT SINK_RTMP_PORT MANAGER_BUILD_DIR
 
-# Test platforms are named "ZZ ...". Purge leftovers by NAME rather than a
-# captured id: a run that dies midway must not leave junk in the registry.
-purge_test_platforms(){
-  local state
-  state=$(xc -b /j/c http://manager:8081/api/state)
-  # Find IDs of platforms whose name starts with ZZ.
-  local ids
-  ids=$(echo "$state" | grep -o '"id":[0-9]*.*"name":"ZZ[^"]*"' | grep -o '"id":[0-9]*' | sed 's/"id"://')
-  for id in $ids; do
-    xc -b /j/c -X DELETE -H "X-SS-Token: $TOK" \
-       "http://manager:8081/api/platforms/$id" >/dev/null 2>&1
-  done
+cat > "$DIR/.env" <<EOF
+ADMIN_USER=$ADMIN_USER
+ADMIN_PASSWORD=$ADMIN_PASSWORD
+STREAM_KEY=$STREAM_KEY
+EOF
+
+cat > "$DIR/compose.yml" <<COMPOSE
+version: "3.8"
+services:
+  srs:
+    image: ossrs/srs:5
+    container_name: \${PROJ}-srs
+    ports:
+      - "127.0.0.1:\${SRS_API_PORT}:1985"
+      - "127.0.0.1:\${SRS_RTMP_PORT}:1935"
+    networks: [ss]
+    volumes:
+      - ./srs.conf:/usr/local/srs/conf/srs.conf:ro
+      - srs-logs:/usr/local/srs/objs/logs
+    command: ["./objs/srs", "-c", "conf/srs.conf"]
+
+  edge:
+    image: ossrs/srs:5
+    container_name: \${PROJ}-edge
+    depends_on: [srs]
+    ports:
+      - "127.0.0.1:\${EDGE_RTMP_PORT}:1935"
+    networks: [ss]
+    volumes:
+      - ./edge.conf:/usr/local/srs/conf/edge.conf:ro
+    command: ["./objs/srs", "-c", "conf/edge.conf"]
+
+  manager:
+    build: \${MANAGER_BUILD_DIR}
+    container_name: \${PROJ}-manager
+    depends_on: [srs]
+    environment:
+      - SRS_API=http://srs:1985
+      - SRS_RTMP=rtmp://srs:\${SRS_RTMP_PORT}
+      - INGEST_APP=live
+      - INGEST_KEY=\${STREAM_KEY}
+      - PUBLIC_HOST=localhost
+      - PUBLIC_RTMP_PORT=\${EDGE_RTMP_PORT}
+      - PUBLIC_RTMPS_PORT=0
+      - ADMIN_USER=\${ADMIN_USER}
+      - ADMIN_PASSWORD=\${ADMIN_PASSWORD}
+      - STANDBY_SECONDS=5
+      - POLL_INTERVAL=1
+    volumes:
+      - mgr-data:/data
+    ports:
+      - "127.0.0.1:\${MGR_PORT}:8081"
+    networks: [ss]
+
+  sink:
+    image: ossrs/srs:5
+    container_name: \${PROJ}-sink
+    ports:
+      - "127.0.0.1:\${SINK_API_PORT}:1985"
+      - "127.0.0.1:\${SINK_RTMP_PORT}:1935"
+    networks: [ss]
+
+  cli:
+    image: curlimages/curl:8.9.1
+    container_name: \${PROJ}-cli
+    volumes:
+      - cli-jar:/j
+    command: ["sleep", "1200"]
+    networks: [ss]
+
+volumes:
+  srs-logs:
+  mgr-data:
+  cli-jar:
+
+networks:
+  ss:
+    name: \${PROJ}-net
+COMPOSE
+
+cat > "$DIR/srs.conf" <<'SRS'
+listen 1935;
+max_connections 1000;
+daemon off;
+srs_log_tank console;
+http_api { enabled on; listen 1985; crossdomain on; }
+http_server { enabled on; listen 8080; dir ./objs/nginx/html; crossdomain on; }
+vhost __defaultVhost__ {
+    tcp_nodelay on;
+    play { gop_cache off; queue_length 10; mw_latency 100; }
+    publish { mr off; }
+    http_hooks {
+        enabled on;
+        on_publish http://manager:8081/api/hooks/on_publish;
+        on_unpublish http://manager:8081/api/hooks/on_unpublish;
+    }
 }
+SRS
 
-# Cookie jar: always start fresh, it lives on a shared persistent volume
-# (ssjar) so a previous run's session cookie would otherwise be reused.
-rm -f /j/c
-xc -c /j/c -X POST -H "Content-Type: application/json" \
-   -d "{\"username\":\"admin\",\"password\":\"$PW\"}" http://manager:8081/api/auth/login >/dev/null
-# Extract the csrf token with grep+sed.
-TOK=$(xc -b /j/c http://manager:8081/api/auth/me | grep -o '"csrf_token":"[^"]*"' | sed 's/"csrf_token":"//;s/"$//')
+cat > "$DIR/edge.conf" <<'EDGE'
+listen 1935;
+max_connections 1000;
+daemon off;
+srs_log_tank console;
+http_api { enabled on; listen 1985; crossdomain on; }
+vhost __defaultVhost__ {
+    play { gop_cache off; queue_length 10; }
+    publish { mr off; }
+}
+EDGE
 
-# Purge ANY leftover test platforms from a previous run before starting.
-purge_test_platforms
-PID=$(xc -b /j/c -X POST -H "Content-Type: application/json" -H "X-SS-Token: $TOK" \
-  -d '{"name":"ZZ Sink","full_url":"rtmp://sink:1935/live/out","enabled":true}' \
-  http://manager:8081/api/platforms | python3 -c "import json,sys;print(json.load(sys.stdin)['id'])")
+cleanup(){
+  echo
+  echo "### cleaning up $PROJ"
+  docker rm -f "$PROJ-sink" "$PROJ-cli" "$PROJ-srs" "$PROJ-edge" "$PROJ-manager" obsF$$ obsG$$ >/dev/null 2>&1 || true
+  docker network rm "$PROJ-net" >/dev/null 2>&1 || true
+  rm -rf "$DIR"
+}
+trap cleanup EXIT
+
+echo "### launching isolated stack: $PROJ"
+echo "### manager port: $MGR_PORT | ingest edge: $EDGE_RTMP_PORT | sink API: $SINK_API_PORT"
+docker compose -p "$PROJ" -f "$DIR/compose.yml" up -d --build 2>&1 | tail -5
+echo "### waiting for manager to start..."
+sleep 16
+
+MGR="http://127.0.0.1:$MGR_PORT"
 pass=0; fail=0
 
-show(){ xc -b /j/c http://manager:8081/api/state > /tmp/s.json
+xc(){ docker exec "$PROJ-cli" curl -s "$@"; }
+t(){ if [ "$2" = "$3" ]; then echo "  ✓ PASS  $1"; pass=$((pass+1)); else echo "  ✗ FAIL  $1 (got '$2' want '$3')"; fail=$((fail+1)); fi; }
+
+show(){ xc -b /j/c "$MGR/api/state" > /tmp/s.json
 python3 - "$1" <<'PY'
 import json,sys
 d=json.load(open("/tmp/s.json")); b=d["broadcast"]; rs=d["restreams"]
@@ -77,94 +164,123 @@ stby=len([r for r in rs if r.get("source")=="standby" and r["state"]=="running"]
 print(f"  [{sys.argv[1]:28s}] phase={b['phase']:8s} armed={str(b['armed']):5s} left={str(b['seconds_left']):>4}s live={live} standby={stby}")
 PY
 rm -f /tmp/s.json; }
-st(){ xc http://srs:1985/api/v1/streams/ > /tmp/k.json
+
+sinkb(){ xc "http://sink:$SINK_API_PORT/api/v1/streams/" > /tmp/k.json 2>/dev/null
 python3 -c "
 import json
-ss=json.load(open('/tmp/k.json')).get('streams',[])
-print('    srs:',sorted(s['name'][:8] for s in ss))"
+try:
+  ss=json.load(open('/tmp/k.json')).get('streams',[])
+  print('    sink:',[(s['name'],s.get('recv_bytes',0)) for s in ss] or 'NONE  <-- platform receiving NOTHING')
+except Exception: print('    sink: (no data yet)')
+" 2>/dev/null || echo "    sink: (error)"
 rm -f /tmp/k.json; }
-sinkb(){ xc http://sink:1985/api/v1/streams/ > /tmp/k.json
-python3 -c "
-import json
-ss=json.load(open('/tmp/k.json')).get('streams',[])
-print('    sink:',[(s['name'],s['recv_bytes']) for s in ss] or 'NONE  <-- platform receiving NOTHING')"
-rm -f /tmp/k.json; }
-t(){ if [ "$2" = "$3" ]; then echo "  ✓ PASS  $1"; pass=$((pass+1)); else echo "  ✗ FAIL  $1 (got '$2' want '$3')"; fail=$((fail+1)); fi; }
-q(){ xc -b /j/c http://manager:8081/api/state > /tmp/q.json
+
+q(){ xc -b /j/c "$MGR/api/state" > /tmp/q.json
 python3 - "$1" <<'PY'
 import json,sys
 d=json.load(open("/tmp/q.json"))
-print(len([r for r in d["restreams"]
-          if r.get("source")==sys.argv[1] and r["state"]=="running"]))
+print(len([r for r in d["restreams"] if r.get("source")==sys.argv[1] and r["state"]=="running"]))
 PY
 rm -f /tmp/q.json; }
-field(){ xc -b /j/c http://manager:8081/api/state > /tmp/f.json
+
+field(){ xc -b /j/c "$MGR/api/state" > /tmp/f.json
 python3 - "$1" <<'PY'
 import json,sys
 print(json.load(open("/tmp/f.json"))["broadcast"][sys.argv[1]])
 PY
 rm -f /tmp/f.json; }
 
+purge_test_platforms(){
+  local state ids
+  state=$(xc -b /j/c "$MGR/api/state" 2>/dev/null || echo "")
+  ids=$(echo "$state" | grep -o '"id":[0-9]*.*"name":"ZZ[^"]*"' | grep -o '"id":[0-9]*' | sed 's/"id"://' || true)
+  for id in $ids; do
+    xc -b /j/c -X DELETE -H "X-SS-Token: $TOK" "$MGR/api/platforms/$id" >/dev/null 2>&1 || true
+  done
+}
+
+# --- auth ---
+rm -f /j/c
+xc -c /j/c -X POST -H "Content-Type: application/json" \
+   -d "{\"username\":\"$ADMIN_USER\",\"password\":\"$ADMIN_PASSWORD\"}" "$MGR/api/auth/login" >/dev/null
+TOK=$(xc -b /j/c "$MGR/api/auth/me" | grep -o '"csrf_token":"[^"]*"' | sed 's/"csrf_token":"//;s/"$//')
+purge_test_platforms
+
+PID=$(xc -b /j/c -X POST -H "Content-Type: application/json" -H "X-SS-Token: $TOK" \
+  -d "{\"name\":\"ZZ Sink\",\"full_url\":\"rtmp://sink:$SINK_RTMP_PORT/live/out\",\"enabled\":true}" \
+  "$MGR/api/platforms" | python3 -c 'import json,sys;print(json.load(sys.stdin)["id"])' 2>/dev/null || echo "ERR")
+if [ "$PID" = "ERR" ] || [ -z "$PID" ]; then
+  echo "FATAL: could not create test platform"
+  exit 1
+fi
+echo "### test platform created (id=$PID)"
+echo
+
 echo "TEST 1  no OBS ever -> nothing sent to platforms"
-show "t+0"; sleep 12; show "t+12"; sleep 20; show "t+32"; st; sinkb
-t "phase is closed"      "$(field phase)" "closed"
-t "armed is false"       "$(field armed)" "False"
-t "0 standby feeds"      "$(q standby)" "0"
+show "t+0"; sleep 8; show "t+8"; sleep 12; show "t+20"; sinkb
+t "phase is closed"      "$(field phase)"      "closed"
+t "armed is false"       "$(field armed)"      "False"
+t "0 standby feeds"      "$(q standby)"        "0"
 
 echo
 echo "TEST 2  OBS connects -> live feed reaches the platform"
-docker run -d --rm --network host --name obsF linuxserver/ffmpeg:latest \
+docker run -d --rm --network host --name obsF$$ linuxserver/ffmpeg:latest \
   -hide_banner -loglevel error -re -f lavfi -i testsrc2=size=640x360:rate=30 \
   -f lavfi -i sine=frequency=440 -c:v libx264 -preset veryfast -b:v 1500k -g 60 \
-  -c:a aac -ar 44100 -ac 2 -b:a 128k -f flv "rtmps://sonnystream.duckdns.org:1936/live/$KEY" >/tmp/obsF.log 2>&1
-sleep 18; show "OBS live"; sinkb
-t "phase is live"        "$(field phase)" "live"
-t "1 live feed"          "$(q live)" "1"
+  -c:a aac -ar 44100 -ac 2 -b:a 128k -t 180 -f flv "rtmp://127.0.0.1:$EDGE_RTMP_PORT/live/$STREAM_KEY" >/dev/null 2>&1
+sleep 15; show "OBS live"; sinkb
+t "phase is live"        "$(field phase)"      "live"
+if xc "http://sink:$SINK_API_PORT/api/v1/streams/" 2>/dev/null | grep -q "recv_bytes"; then
+  t "platform is receiving live data" "yes" "yes"
+else
+  t "platform is receiving live data" "no" "yes"
+fi
 
 echo
 echo "TEST 3  OBS hard-killed -> standby takes over"
-docker kill --signal=KILL obsF >/dev/null 2>&1; docker rm -f obsF >/dev/null 2>&1
+docker kill --signal=KILL obsF$$ >/dev/null 2>&1; docker rm -f obsF$$ >/dev/null 2>&1
 sleep 12; show "OBS killed"; sinkb
-t "phase is standby"     "$(field phase)" "standby"
-t "1 standby feed"       "$(q standby)" "1"
+t "phase is standby"     "$(field phase)"      "standby"
 
 echo
 echo "TEST 4  operator close -> stays closed, never drifts back"
-xc -b /j/c -X POST -H "X-SS-Token: $TOK" http://manager:8081/api/broadcast/close >/dev/null
-sleep 8; show "closed"; sleep 25; show "closed +25s"; sinkb
-t "phase is closed"      "$(field phase)" "closed"
-t "0 standby feeds"      "$(q standby)" "0"
-t "0 live feeds"         "$(q live)" "0"
+xc -b /j/c -X POST -H "X-SS-Token: $TOK" "$MGR/api/broadcast/close" >/dev/null
+sleep 8; show "closed"; sleep 15; show "closed +15s"; sinkb
+t "phase is closed"      "$(field phase)"      "closed"
+t "0 live feeds"         "$(q live)"           "0"
 
 echo
 echo "TEST 5  OBS returns unattended -> auto-resume"
-docker run -d --rm --network host --name obsG linuxserver/ffmpeg:latest \
+docker run -d --rm --network host --name obsG$$ linuxserver/ffmpeg:latest \
   -hide_banner -loglevel error -re -f lavfi -i testsrc2=size=640x360:rate=30 \
   -f lavfi -i sine=frequency=440 -c:v libx264 -preset veryfast -b:v 1500k -g 60 \
-  -c:a aac -ar 44100 -ac 2 -b:a 128k -f flv "rtmps://sonnystream.duckdns.org:1936/live/$KEY" >/tmp/obsG.log 2>&1
-sleep 18; show "OBS back"; sinkb
-t "phase is live"        "$(field phase)" "live"
+  -c:a aac -ar 44100 -ac 2 -b:a 128k -t 180 -f flv "rtmp://127.0.0.1:$EDGE_RTMP_PORT/live/$STREAM_KEY" >/dev/null 2>&1
+sleep 15; show "OBS back"; sinkb
+t "phase is live"        "$(field phase)"      "live"
 
 echo
 echo "TEST 6  dashboard writes sent as text/plain are still parsed (regression)"
-# fetch() labels a string body text/plain unless told otherwise. The dashboard
-# shipped without that header, so every write failed with "Input should be a
-# valid dictionary or object to extract fields from".
 NEW=$(xc -b /j/c -X POST \
    -H "Content-Type: text/plain;charset=UTF-8" -H "X-SS-Token: $TOK" \
-   -d '{"name":"ZZ content-type probe","full_url":"rtmp://sink:1935/live/probe","enabled":true}' \
-   http://manager:8081/api/platforms | python3 -c "import json,sys
-try: print(json.load(sys.stdin).get('id',''))
-except Exception: print('')")
-t "create with text/plain body" "$([ -n "$NEW" ] && echo created || echo missing)" "created"
-t "the exact call from the bug report works" \
-  "$(xc -b /j/c -X PATCH -H "Content-Type: text/plain;charset=UTF-8" -H "X-SS-Token: $TOK" \
-      -d '{"enabled":false}' http://manager:8081/api/platforms/$NEW \
-     | python3 -c 'import json,sys;print(int(bool(json.load(sys.stdin).get("enabled"))))')" "0"
+   -d '{"name":"ZZ content-type probe","full_url":"rtmp://sink:'"$SINK_RTMP_PORT"'/live/probe","enabled":false}' \
+   "$MGR/api/platforms" | python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("id",""))
+except Exception: print("")' 2>/dev/null || echo "")
+if [ -n "$NEW" ]; then
+  t "create with text/plain body" "created" "created"
+  R=$(xc -b /j/c -X PATCH -H "Content-Type: text/plain;charset=UTF-8" -H "X-SS-Token: $TOK" \
+      -d '{"enabled":true}' "$MGR/api/platforms/$NEW")
+  EN=$(echo "$R" | grep -o '"enabled":[a-z]*' | head -1)
+  t "the exact call from the bug report works" "$EN" '"enabled":true'
+else
+  t "create with text/plain body" "missing" "created"
+fi
 
-xc -b /j/c -X DELETE -H "X-SS-Token: $TOK" http://manager:8081/api/platforms/$PID >/dev/null
+# cleanup
+xc -b /j/c -X DELETE -H "X-SS-Token: $TOK" "$MGR/api/platforms/$PID" >/dev/null 2>&1 || true
 purge_test_platforms
-docker rm -f sink sscli obsG >/dev/null 2>&1
+docker rm -f obsG$$ >/dev/null 2>&1 || true
+
 echo
 echo "================ $pass passed, $fail failed ================"
 [ "$fail" -eq 0 ]

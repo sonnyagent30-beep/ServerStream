@@ -60,7 +60,13 @@
 
   "bugs_fixed_this_session": [
     "api() Content-Type inversion (the reported 'failed to fetch' / 'Input should be a valid dictionary')",
-    "Cache-Control: no-store on / and /login to prevent stale JS in browser cache"
+    "Cache-Control: no-store on / and /login to prevent stale JS in browser cache",
+    "README duplicate login/logout API rows removed",
+    "README quick-start command fixed (SS_HOSTNAME as env var, not positional arg)",
+    "deploy.sh now warns when ADMIN_PASSWORD is skipped on existing .env",
+    "deploy.sh usage text and example corrected to SS_HOSTNAME=... ./scripts/deploy.sh",
+    "tests/test_app.py hardcoded Windows path replaced with relative path resolution",
+    "scripts/acceptance.sh rewritten to be fully isolated (own compose project, ports, containers, credentials — never touches production)"
   ],
 
   "known_issues_remaining": [

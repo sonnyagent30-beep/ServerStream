@@ -1,6 +1,6 @@
 
 import os, sys, json, tempfile
-sys.path.insert(0, r"C:\Users\Dannion/ServerStream/manager")
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "manager"))
 
 tmp = tempfile.mkdtemp()
 os.environ.update({
