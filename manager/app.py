@@ -443,12 +443,27 @@ class Supervisor:
         with self._lock:
             existing = dict(self._procs)
 
+        # Current platform set keyed by id for fast lookup.
+        current_platforms = {int(p["id"]): p for p in list_platforms()}
+
         # 1. anything running against the wrong source, or stale, gets torn down
         for key, r in existing.items():
+            pid = key[0]
             stale_source = key[1] != source
-            if phase == self.PHASE_CLOSED or stale_source:
-                self._stop(key, "closed" if phase == self.PHASE_CLOSED
-                           else f"source switched to {source}")
+            # Reconcile: platform may have been disabled, deleted, or edited.
+            p = current_platforms.get(pid)
+            platform_changed = False
+            if p is None:
+                platform_changed = True
+            elif not p["enabled"]:
+                platform_changed = True
+            elif r.target != resolve_target(p):
+                platform_changed = True
+            if phase == self.PHASE_CLOSED or stale_source or platform_changed:
+                reason = ("closed" if phase == self.PHASE_CLOSED else
+                          f"source switched to {source}" if stale_source else
+                          "platform disabled/deleted/edited")
+                self._stop(key, reason)
                 self._failures.pop(key, None)
                 self._retry_after.pop(key, None)
             elif not r.alive:
@@ -466,7 +481,7 @@ class Supervisor:
             return
         if not standby.running and source == STANDBY_STREAM:
             standby.start()          # self-heal if the standby publisher died
-        platforms = [p for p in list_platforms() if p["enabled"]]
+        platforms = [p for p in current_platforms.values() if p["enabled"]]
         for p in platforms:
             key = (int(p["id"]), source)
             with self._lock:

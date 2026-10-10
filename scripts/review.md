@@ -63,10 +63,14 @@
     "Cache-Control: no-store on / and /login to prevent stale JS in browser cache",
     "README duplicate login/logout API rows removed",
     "README quick-start command fixed (SS_HOSTNAME as env var, not positional arg)",
-    "deploy.sh now warns when ADMIN_PASSWORD is skipped on existing .env",
+    "README security wording fixed: stream keys are masked but ingest key shown to authenticated admin",
+    "deploy.sh now prompts/warns when ADMIN_PASSWORD is still 'change-me' on existing .env",
     "deploy.sh usage text and example corrected to SS_HOSTNAME=... ./scripts/deploy.sh",
     "tests/test_app.py hardcoded Windows path replaced with relative path resolution",
-    "scripts/acceptance.sh rewritten to be fully isolated (own compose project, ports, containers, credentials — never touches production)"
+    "scripts/acceptance.sh rewritten to be fully isolated (own compose project, ports, containers, credentials — never touches production)",
+    "scripts/acceptance.sh: fixed internal routing (manager pushes via container:1935, OBS to host-mapped port, platforms use internal container names)",
+    "manager/app.py: supervisor poll_once() now reconciles running processes against current platform records — torn down when disabled, deleted, or URL edited",
+    "scripts/review.md: sanitized deployed hostname and public IP"
   ],
 
   "known_issues_remaining": [
