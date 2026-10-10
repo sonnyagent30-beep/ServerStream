@@ -1,7 +1,7 @@
 {
   "project": "ServerStream",
   "repo": "github.com/sonnyagent30-beep/ServerStream",
-  "deployed": "sonnystream.duckdns.org → Contabo 84.247.132.12",
+  "deployed": "sonnystream.duckdns.org — Contabo VPS (details sanitized)",
   "review_date": "2026-10-10",
   "reviewer": "Sonny (operational review, not a security audit)",
 
@@ -120,5 +120,5 @@
     ]
   },
 
-  "deploy_status": "Live at sonnystream.duckdns.org. Commit f5f06e4 deployed. Cache-control: no-store confirmed in response headers."
+  "deploy_status": "Live. Commit f5f06e4 deployed. Cache-control: no-store confirmed in response headers."
 }

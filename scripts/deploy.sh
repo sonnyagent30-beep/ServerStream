@@ -64,6 +64,8 @@ if [ -z "${ADMIN_PASSWORD}" ]; then
     read -r -s -p "Dashboard admin password: " ADMIN_PASSWORD; echo
   elif [ "${FORCE_PASSWORD:-0}" = "1" ]; then
     read -r -s -p "Dashboard admin password: " ADMIN_PASSWORD; echo
+  elif grep -q '^ADMIN_PASSWORD=change-me$\|^ADMIN_PASSWORD=$' .env 2>/dev/null; then
+    read -r -s -p "Dashboard admin password (currently 'change-me'): " ADMIN_PASSWORD; echo
   fi
 fi
 if [ -n "${ADMIN_PASSWORD}" ]; then
@@ -75,9 +77,9 @@ if [ -n "${ADMIN_PASSWORD}" ]; then
       "${ADMIN_USER:-admin}" "${ESCAPED}" >> .env
   fi
   echo "  dashboard admin password set"
-elif [ "${NEW_ENV}" -eq 1 ]; then
-  echo "  WARNING: .env.example has ADMIN_PASSWORD=change-me; leaving it as-is."
-  echo "  Set a real password with: sudo ./scripts/deploy.sh SS_HOSTNAME=$DOMAIN ADMIN_PASSWORD=..."
+elif grep -q '^ADMIN_PASSWORD=change-me$\|^ADMIN_PASSWORD=$' .env 2>/dev/null; then
+  echo "  WARNING: dashboard password is still 'change-me' (insecure!)."
+  echo "  Set a real password with: sudo SS_HOSTNAME=$DOMAIN ADMIN_PASSWORD=... ./scripts/deploy.sh"
 fi
 chmod 600 .env
 

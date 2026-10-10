@@ -123,9 +123,11 @@ Full guide: [`scripts/obs-guide.md`](scripts/obs-guide.md).
 
 - **Single-admin login is mandatory.** Stream keys are credentials. A dashboard
   on a public IP without auth hands every platform to whoever asks.
-- **Stream keys never leave the server.** Every API response is masked
-  (`mask_secret` / `mask_url`), and query-parameter secrets are redacted even
-  if a platform URL is unusual. This holds regardless of auth state.
+- **Stream keys are masked in API responses.** Platform and stream keys are
+  masked (`mask_secret` / `mask_url`) in all list/state endpoints, and
+  query-parameter secrets are redacted. The one exception: the OBS ingest key
+  is shown once in `/api/state` (masked as a hint) to the authenticated admin
+  for setup. Platform keys are never returned in full to the dashboard.
 - **CSRF protection** — session cookie is `SameSite=Strict` and mutations
   require an `X-SS-Token` header.
 - **Ingest is stream-key authenticated.** SRS calls the manager's `on_publish`
