@@ -42,18 +42,24 @@ xc(){ docker exec sscli curl -s "$@"; }
 # Test platforms are named "ZZ ...". Purge leftovers by NAME rather than a
 # captured id: a run that dies midway must not leave junk in the registry.
 purge_test_platforms(){
+  local state
+  state=$(xc -b /j/c http://manager:8081/api/state)
+  # Find IDs of platforms whose name starts with ZZ.
   local ids
-  ids=$(xc -b /j/c http://manager:8081/api/state | sed -n 's/.*"id":\([0-9]*\).*"name":"ZZ[^"]*".*/\1/p' 2>/dev/null | sort -u)
+  ids=$(echo "$state" | grep -o '"id":[0-9]*.*"name":"ZZ[^"]*"' | grep -o '"id":[0-9]*' | sed 's/"id"://')
   for id in $ids; do
     xc -b /j/c -X DELETE -H "X-SS-Token: $TOK" \
        "http://manager:8081/api/platforms/$id" >/dev/null 2>&1
   done
 }
 
+# Cookie jar: always start fresh, it lives on a shared persistent volume
+# (ssjar) so a previous run's session cookie would otherwise be reused.
+rm -f /j/c
 xc -c /j/c -X POST -H "Content-Type: application/json" \
    -d "{\"username\":\"admin\",\"password\":\"$PW\"}" http://manager:8081/api/auth/login >/dev/null
-# Extract the csrf token with sed, not python, to avoid nested-quote hell.
-TOK=$(xc -b /j/c http://manager:8081/api/auth/me | sed -n 's/.*"csrf_token":"\([^"]*\)".*/\1/p')
+# Extract the csrf token with grep+sed.
+TOK=$(xc -b /j/c http://manager:8081/api/auth/me | grep -o '"csrf_token":"[^"]*"' | sed 's/"csrf_token":"//;s/"$//')
 
 # Purge ANY leftover test platforms from a previous run before starting.
 purge_test_platforms
