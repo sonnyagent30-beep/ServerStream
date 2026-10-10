@@ -22,18 +22,20 @@
 C="curlimages/curl:latest"
 PW=$(grep -oP '(?<=^ADMIN_PASSWORD=).*' /opt/serversstream/.env)
 KEY=$(grep -oP '(?<=^STREAM_KEY=).*' /opt/serversstream/.env)
-docker rm -f sscli sink >/dev/null 2>&1
-docker run -d --rm --name sink --network serversstream ossrs/srs:5 >/dev/null
-docker run -d --rm --name sscli --network serversstream -v ssjar:/j \
-  alpine:3.20 sh -c 'apk add --no-cache curl >/dev/null 2>&1; sleep 1800' >/dev/null
-sleep 9
-# Restart the manager FIRST: sessions live in memory, so a restart after
-# logging in would immediately invalidate the cookie.
-docker rm -f obsA obsB obsC obsD obsE obsF obsG obs1 obs2 obsZ obs_sim obsfg obsz >/dev/null 2>&1
+# Kill any leftover OBS publishers / sinks from a previous run.
+docker rm -f sscli sink obsA obsB obsC obsD obsE obsF obsG obs1 obs2 obsZ obs_sim obsfg obsz >/dev/null 2>&1
+# Restart the manager: sessions live in memory, so a restart after logging in
+# would immediately invalidate the cookie.
 docker restart serversstream-manager >/dev/null
 sleep 14
 echo "### clean baseline established (manager restarted, no OBS publishers)"
 echo
+
+# Start the fresh test harness containers.
+docker run -d --rm --name sink --network serversstream ossrs/srs:5 >/dev/null
+docker run -d --rm --name sscli --network serversstream -v ssjar:/j \
+  alpine:3.20 sh -c 'apk add --no-cache curl >/dev/null 2>&1; sleep 1800' >/dev/null
+sleep 9
 
 xc(){ docker exec sscli curl -s "$@"; }
 
@@ -41,10 +43,7 @@ xc(){ docker exec sscli curl -s "$@"; }
 # captured id: a run that dies midway must not leave junk in the registry.
 purge_test_platforms(){
   local ids
-  ids=$(xc -b /j/c http://manager:8081/api/state | python3 -c "
-import json,sys
-for p in json.load(sys.stdin)['platforms']:
-    if p['name'].startswith('ZZ'): print(p['id'])" 2>/dev/null)
+  ids=$(xc -b /j/c http://manager:8081/api/state | sed -n 's/.*"id":\([0-9]*\).*"name":"ZZ[^"]*".*/\1/p' 2>/dev/null | sort -u)
   for id in $ids; do
     xc -b /j/c -X DELETE -H "X-SS-Token: $TOK" \
        "http://manager:8081/api/platforms/$id" >/dev/null 2>&1
@@ -53,7 +52,8 @@ for p in json.load(sys.stdin)['platforms']:
 
 xc -c /j/c -X POST -H "Content-Type: application/json" \
    -d "{\"username\":\"admin\",\"password\":\"$PW\"}" http://manager:8081/api/auth/login >/dev/null
-TOK=$(xc -b /j/c http://manager:8081/api/auth/me | python3 -c 'import json,sys;print(json.load(sys.stdin).get(\"csrf_token\",\"\"))')
+# Extract the csrf token with sed, not python, to avoid nested-quote hell.
+TOK=$(xc -b /j/c http://manager:8081/api/auth/me | sed -n 's/.*"csrf_token":"\([^"]*\)".*/\1/p')
 
 # Purge ANY leftover test platforms from a previous run before starting.
 purge_test_platforms
