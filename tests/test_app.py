@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 import app as A
 
 fails = []
-def check(name, cond, extra=""):
+def check(name, cond, extra: object = ""):
     print(("  PASS  " if cond else "  FAIL  ") + name + (("  -> " + str(extra)) if extra and not cond else ""))
     if not cond: fails.append(name)
 
@@ -120,6 +120,16 @@ check("logout 200", r.status_code == 200, r.status_code)
 c.cookies.clear()
 r = c.get("/api/state")
 check("state blocked again after logout", r.status_code == 401, r.status_code)
+
+print("\n== dashboard HTML is not cached (stale JS = 'failed to fetch') ==")
+r = c.post("/api/auth/login", json={"username":"admin","password":"s3cret-test-pw"})
+check("re-login for cache test", r.status_code == 200, r.status_code)
+r = c.get("/")
+check("index serves 200 when authenticated", r.status_code == 200, r.status_code)
+check("index has Cache-Control: no-store",
+      r.headers.get("cache-control","").lower().replace(" ","")=="no-store",
+      r.headers.get("cache-control"))
+check("index has body", len(r.text) > 1000, len(r.text))
 
 print("\n" + ("ALL PASS" if not fails else f"{len(fails)} FAILURES: {fails}"))
 sys.exit(1 if fails else 0)

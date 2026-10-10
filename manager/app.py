@@ -1140,15 +1140,23 @@ if os.path.isdir(STATIC_DIR):
 
 
 @app.get("/login", include_in_schema=False)
-def login_page() -> FileResponse:
-    return FileResponse(os.path.join(STATIC_DIR, "login.html"))
+def login_page(request: Request) -> Response:
+    resp = FileResponse(os.path.join(STATIC_DIR, "login.html"))
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 
 @app.get("/", include_in_schema=False)
 def index(request: Request) -> Response:
     if not session_valid(request.cookies.get(SESSION_COOKIE)):
         return RedirectResponse("/login", status_code=302)
-    return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+    resp = FileResponse(os.path.join(STATIC_DIR, "index.html"))
+    # The dashboard is a single-page shell with no versioned asset names. If
+    # the browser caches an old copy it keeps running stale JavaScript that talks
+    # to the API wrong - exactly the class of "failed to fetch" that is easiest
+    # to misdiagnose. Force a fresh load every time.
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 
 @app.get("/favicon.ico", include_in_schema=False)
