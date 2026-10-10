@@ -53,7 +53,10 @@ for p in json.load(sys.stdin)['platforms']:
 
 xc -c /j/c -X POST -H "Content-Type: application/json" \
    -d "{\"username\":\"admin\",\"password\":\"$PW\"}" http://manager:8081/api/auth/login >/dev/null
-TOK=$(xc -b /j/c http://manager:8081/api/auth/me | python3 -c "import json,sys;print(json.load(sys.stdin).get('csrf_token',''))")
+TOK=$(xc -b /j/c http://manager:8081/api/auth/me | python3 -c 'import json,sys;print(json.load(sys.stdin).get(\"csrf_token\",\"\"))')
+
+# Purge ANY leftover test platforms from a previous run before starting.
+purge_test_platforms
 PID=$(xc -b /j/c -X POST -H "Content-Type: application/json" -H "X-SS-Token: $TOK" \
   -d '{"name":"ZZ Sink","full_url":"rtmp://sink:1935/live/out","enabled":true}' \
   http://manager:8081/api/platforms | python3 -c "import json,sys;print(json.load(sys.stdin)['id'])")
